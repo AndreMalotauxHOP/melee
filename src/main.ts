@@ -726,7 +726,7 @@ function renderOnline(): void {
   panel.append(cols);
 
   const status = el('div', `status${onlineError ? ' err' : ''}`);
-  status.textContent = onlineError || onlineStatus || 'Server: ws://localhost:3080';
+  status.textContent = onlineError || onlineStatus || 'Connecting to match server…';
   panel.append(status);
 
   if (onlineCode && !onlineError) {

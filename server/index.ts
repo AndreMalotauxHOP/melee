@@ -1,4 +1,7 @@
 import { createServer } from 'node:http';
+import { createReadStream, existsSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 
 type ShipId = string;
@@ -20,6 +23,24 @@ type Room = {
 const rooms = new Map<string, Room>();
 const PORT = Number(process.env.PORT || 3080);
 const FLEET_SIZE = 6;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DIST = path.resolve(__dirname, '..', 'dist');
+
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.json': 'application/json',
+  '.map': 'application/json',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
 
 function codeGen(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -64,9 +85,52 @@ function tryStart(room: Room): void {
   console.log(`Match start ${room.code} seed=${room.seed}`);
 }
 
-const server = createServer((_req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Melee Arena WS server OK\n');
+function safeJoin(root: string, reqPath: string): string | null {
+  const decoded = decodeURIComponent(reqPath.split('?')[0] || '/');
+  const cleaned = path.normalize(decoded).replace(/^(\.\.[/\\])+/, '');
+  const full = path.join(root, cleaned);
+  if (!full.startsWith(root)) return null;
+  return full;
+}
+
+async function serveStatic(
+  reqUrl: string,
+  res: import('node:http').ServerResponse,
+): Promise<void> {
+  if (!existsSync(DIST)) {
+    res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Build missing. Run npm run build before npm start.\n');
+    return;
+  }
+
+  let filePath = safeJoin(DIST, reqUrl === '/' ? '/index.html' : reqUrl);
+  if (!filePath) {
+    res.writeHead(403).end('Forbidden');
+    return;
+  }
+
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+    // SPA fallback
+    filePath = path.join(DIST, 'index.html');
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+  const type = MIME[ext] || 'application/octet-stream';
+  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=604800' });
+  createReadStream(filePath).pipe(res);
+}
+
+const server = createServer((req, res) => {
+  const url = req.url || '/';
+  if (url === '/health' || url === '/healthz') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('ok\n');
+    return;
+  }
+  void serveStatic(url, res).catch((err) => {
+    console.error(err);
+    res.writeHead(500).end('Server error');
+  });
 });
 
 const wss = new WebSocketServer({ server });
@@ -165,5 +229,8 @@ wss.on('connection', (ws) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Melee Arena server on ws://localhost:${PORT}`);
+  const hasDist = existsSync(DIST);
+  console.log(`Scrap Rumble listening on :${PORT}`);
+  console.log(`  HTTP  ${hasDist ? DIST : '(no dist yet - run npm run build)'}`);
+  console.log(`  WS    ws://localhost:${PORT}`);
 });

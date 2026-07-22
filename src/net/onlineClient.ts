@@ -24,8 +24,12 @@ export type OnlineEvents = {
 function defaultWsUrl(): string {
   if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const host = location.hostname || 'localhost';
-  return `${proto}://${host}:3080`;
+  // Vite dev: client on :5173, WS server on :3080
+  if (import.meta.env.DEV) {
+    return `${proto}://${location.hostname || 'localhost'}:3080`;
+  }
+  // Production: same host serves HTTP + WebSocket
+  return `${proto}://${location.host}`;
 }
 
 /**
