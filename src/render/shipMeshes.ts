@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { ShipId } from '../game/types';
 import { SHIPS } from '../game/ships';
 
-type TexStyle = 'panels' | 'plated' | 'organic' | 'crystal' | 'carbon' | 'bio';
+type TexStyle = 'panels' | 'plated' | 'organic' | 'crystal' | 'carbon' | 'bio' | 'neon';
 
 const texCache = new Map<string, THREE.CanvasTexture>();
 
@@ -11,14 +11,14 @@ function hash(n: number): number {
   return x - Math.floor(x);
 }
 
-/** Procedural hull albedo with panels, rivets, stripes, and wear. */
+/** Procedural hull albedo - anime panel lines + neon stripe. */
 function makeHullTexture(
   baseHex: string,
   accentHex: string,
   seed: number,
   style: TexStyle,
 ): THREE.CanvasTexture {
-  const key = `${baseHex}|${accentHex}|${seed}|${style}`;
+  const key = `v2|${baseHex}|${accentHex}|${seed}|${style}`;
   const hit = texCache.get(key);
   if (hit) return hit;
 
@@ -31,19 +31,18 @@ function makeHullTexture(
   ctx.fillStyle = baseHex;
   ctx.fillRect(0, 0, size, size);
 
-  // Subtle noise / wear
-  for (let i = 0; i < 1800; i++) {
+  for (let i = 0; i < 2200; i++) {
     const x = hash(seed + i * 3.1) * size;
     const y = hash(seed + i * 7.7) * size;
-    const a = 0.04 + hash(seed + i) * 0.1;
-    ctx.fillStyle = `rgba(0,0,0,${a})`;
+    const a = 0.03 + hash(seed + i) * 0.08;
+    ctx.fillStyle = `rgba(255,255,255,${a * 0.35})`;
     ctx.fillRect(x, y, 1 + hash(seed + i * 2) * 2, 1);
   }
 
-  if (style === 'panels' || style === 'plated' || style === 'carbon') {
-    const cell = style === 'plated' ? 28 : style === 'carbon' ? 16 : 32;
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-    ctx.lineWidth = 1.5;
+  if (style === 'panels' || style === 'plated' || style === 'carbon' || style === 'neon') {
+    const cell = style === 'plated' ? 26 : style === 'carbon' ? 14 : 30;
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 1.2;
     for (let x = 0; x <= size; x += cell) {
       ctx.beginPath();
       ctx.moveTo(x + 0.5, 0);
@@ -56,77 +55,60 @@ function makeHullTexture(
       ctx.lineTo(size, y + 0.5);
       ctx.stroke();
     }
-    // Rivets
-    ctx.fillStyle = 'rgba(255,255,255,0.22)';
-    for (let x = cell; x < size; x += cell) {
-      for (let y = cell; y < size; y += cell) {
-        ctx.beginPath();
-        ctx.arc(x, y, 1.6, 0, Math.PI * 2);
-        ctx.fill();
-      }
+    ctx.strokeStyle = `rgba(255,255,255,0.12)`;
+    for (let i = 0; i < 8; i++) {
+      const y = hash(seed + i * 41) * size;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(size, y + (hash(seed + i) - 0.5) * 20);
+      ctx.stroke();
     }
   }
 
   if (style === 'organic' || style === 'bio') {
-    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.28)';
     ctx.lineWidth = 2;
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 16; i++) {
       const y0 = hash(seed + i * 9) * size;
       ctx.beginPath();
       ctx.moveTo(0, y0);
       for (let x = 0; x <= size; x += 16) {
-        ctx.lineTo(x, y0 + Math.sin(x * 0.04 + i) * 10);
+        ctx.lineTo(x, y0 + Math.sin(x * 0.05 + i) * 12);
       }
       ctx.stroke();
     }
-    for (let i = 0; i < 40; i++) {
-      const x = hash(seed + i * 11) * size;
-      const y = hash(seed + i * 13) * size;
-      const r = 4 + hash(seed + i * 17) * 14;
-      ctx.fillStyle = `rgba(0,0,0,${0.08 + hash(seed + i) * 0.12})`;
-      ctx.beginPath();
-      ctx.ellipse(x, y, r, r * 0.6, hash(seed + i) * 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
   }
 
-  if (style === 'crystal') {
-    ctx.strokeStyle = 'rgba(255,255,255,0.28)';
-    ctx.lineWidth = 1.2;
-    for (let i = 0; i < 18; i++) {
+  if (style === 'crystal' || style === 'neon') {
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1.4;
+    for (let i = 0; i < 22; i++) {
       const x0 = hash(seed + i) * size;
       const y0 = hash(seed + i * 3) * size;
       ctx.beginPath();
       ctx.moveTo(x0, y0);
-      ctx.lineTo(x0 + 40 + hash(seed + i * 5) * 60, y0 + 20 + hash(seed + i * 7) * 50);
+      ctx.lineTo(
+        x0 + 30 + hash(seed + i * 5) * 70,
+        y0 + 10 + hash(seed + i * 7) * 55,
+      );
       ctx.stroke();
-    }
-    for (let i = 0; i < 12; i++) {
-      const x = hash(seed + i * 19) * size;
-      const y = hash(seed + i * 23) * size;
-      ctx.fillStyle = `rgba(255,255,255,${0.08 + hash(seed + i) * 0.15})`;
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + 18, y + 8);
-      ctx.lineTo(x + 6, y + 22);
-      ctx.closePath();
-      ctx.fill();
     }
   }
 
-  // Accent stripe band
+  // Neon accent bands
   ctx.fillStyle = accentHex;
-  ctx.globalAlpha = 0.55;
-  ctx.fillRect(0, size * 0.42, size, size * 0.1);
-  ctx.globalAlpha = 0.3;
-  ctx.fillRect(size * 0.7, 0, size * 0.08, size);
+  ctx.globalAlpha = 0.75;
+  ctx.fillRect(0, size * 0.38, size, size * 0.08);
+  ctx.globalAlpha = 0.45;
+  ctx.fillRect(size * 0.72, 0, size * 0.06, size);
+  ctx.globalAlpha = 0.35;
+  ctx.fillRect(0, size * 0.78, size, size * 0.035);
   ctx.globalAlpha = 1;
 
-  // Edge highlight
   const grad = ctx.createLinearGradient(0, 0, size, size);
-  grad.addColorStop(0, 'rgba(255,255,255,0.18)');
-  grad.addColorStop(0.5, 'rgba(255,255,255,0)');
-  grad.addColorStop(1, 'rgba(0,0,0,0.2)');
+  grad.addColorStop(0, 'rgba(255,255,255,0.28)');
+  grad.addColorStop(0.45, 'rgba(255,255,255,0)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.25)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);
 
@@ -139,7 +121,7 @@ function makeHullTexture(
 }
 
 function makeRoughMap(seed: number): THREE.CanvasTexture {
-  const key = `rough-${seed}`;
+  const key = `rough-v2-${seed}`;
   const hit = texCache.get(key);
   if (hit) return hit;
   const size = 128;
@@ -149,7 +131,7 @@ function makeRoughMap(seed: number): THREE.CanvasTexture {
   const ctx = canvas.getContext('2d')!;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const v = 90 + hash(seed + x * 0.7 + y * 1.3) * 100;
+      const v = 70 + hash(seed + x * 0.7 + y * 1.3) * 120;
       ctx.fillStyle = `rgb(${v},${v},${v})`;
       ctx.fillRect(x, y, 1, 1);
     }
@@ -165,11 +147,13 @@ function hullMat(
   accent: string,
   seed: number,
   style: TexStyle,
-  metal = 0.7,
-  rough = 0.38,
+  metal = 0.88,
+  rough = 0.24,
 ): THREE.MeshStandardMaterial {
   const map = makeHullTexture(color, accent, seed, style);
-  map.repeat.set(2, 2);
+  map.repeat.set(2.2, 2.2);
+  const emissiveMap = makeHullTexture(accent, '#ffffff', seed + 17, 'neon');
+  emissiveMap.repeat.set(2.2, 2.2);
   return new THREE.MeshStandardMaterial({
     map,
     color: '#ffffff',
@@ -177,35 +161,46 @@ function hullMat(
     roughness: rough,
     roughnessMap: makeRoughMap(seed),
     emissive: accent,
-    emissiveIntensity: 0.12,
+    emissiveMap,
+    emissiveIntensity: 0.42,
   });
 }
 
-function glowMat(color: string, intensity = 1.4): THREE.MeshStandardMaterial {
+function glowMat(color: string, intensity = 2.8): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
     color,
     emissive: color,
     emissiveIntensity: intensity,
     metalness: 0.2,
-    roughness: 0.25,
+    roughness: 0.14,
+  });
+}
+
+function chromeMat(color: string): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color,
+    metalness: 1,
+    roughness: 0.08,
+    emissive: color,
+    emissiveIntensity: 0.28,
   });
 }
 
 function darkMat(seed: number): THREE.MeshStandardMaterial {
-  return hullMat('#1a2233', '#334155', seed + 99, 'carbon', 0.85, 0.45);
+  return hullMat('#0b1220', '#3d5a80', seed + 99, 'carbon', 0.92, 0.32);
 }
 
 function glassMat(color: string): THREE.MeshPhysicalMaterial {
   return new THREE.MeshPhysicalMaterial({
     color,
-    metalness: 0.1,
-    roughness: 0.05,
-    transmission: 0.55,
-    thickness: 0.4,
+    metalness: 0.05,
+    roughness: 0.04,
+    transmission: 0.72,
+    thickness: 0.55,
     transparent: true,
-    opacity: 0.85,
+    opacity: 0.9,
     emissive: color,
-    emissiveIntensity: 0.35,
+    emissiveIntensity: 0.65,
   });
 }
 
@@ -227,372 +222,402 @@ function add(
   return m;
 }
 
-function addGreebles(
+function addFin(
   g: THREE.Group,
   mat: THREE.Material,
-  cx: number,
-  cy: number,
-  cz: number,
-  n: number,
-  seed: number,
-): void {
-  for (let i = 0; i < n; i++) {
-    const sx = 0.08 + hash(seed + i) * 0.18;
-    const sy = 0.06 + hash(seed + i + 1) * 0.12;
-    const sz = 0.08 + hash(seed + i + 2) * 0.16;
-    const ox = (hash(seed + i + 3) - 0.5) * 0.9;
-    const oy = (hash(seed + i + 4) - 0.5) * 0.35;
-    const oz = (hash(seed + i + 5) - 0.5) * 0.7;
-    add(g, new THREE.BoxGeometry(sx, sy, sz), mat, cx + ox, cy + oy, cz + oz);
-  }
-}
-
-function addWindows(
-  g: THREE.Group,
-  glass: THREE.Material,
   x: number,
   y: number,
   z: number,
-  count: number,
-  spacing: number,
+  len: number,
+  tall: number,
+  thick: number,
+  sweep = 0.35,
 ): void {
-  for (let i = 0; i < count; i++) {
-    add(g, new THREE.BoxGeometry(0.12, 0.08, 0.06), glass, x - i * spacing, y, z);
-  }
+  const fin = add(g, new THREE.BoxGeometry(len, tall, thick), mat, x, y, z, 0, 0, sweep);
+  fin.scale.set(1, 1, 1);
 }
 
-function addThrusterPair(
+function addWing(
+  g: THREE.Group,
+  body: THREE.Material,
+  glow: THREE.Material,
+  z: number,
+  span: number,
+  chord: number,
+): void {
+  const wing = add(g, new THREE.BoxGeometry(chord, 0.06, span), body, 0.05, 0.02, z * 0.55, 0, 0, z > 0 ? 0.25 : -0.25);
+  wing.scale.set(1, 1, 1);
+  add(g, new THREE.BoxGeometry(chord * 0.7, 0.03, span * 0.15), glow, -0.1, 0.06, z * 0.7);
+  add(g, new THREE.BoxGeometry(0.35, 0.04, span * 0.35), glow, chord * 0.15, 0.05, z * 0.85, 0, 0, z > 0 ? 0.5 : -0.5);
+}
+
+function addThrusterCluster(
   g: THREE.Group,
   glow: THREE.Material,
   dark: THREE.Material,
   x: number,
   spread: number,
+  count = 2,
 ): void {
-  for (const side of [-1, 1]) {
-    add(g, new THREE.CylinderGeometry(0.12, 0.16, 0.35, 10), dark, x, 0, side * spread, 0, 0, Math.PI / 2);
-    add(g, new THREE.SphereGeometry(0.1, 10, 8), glow, x - 0.12, 0, side * spread);
+  for (let i = 0; i < count; i++) {
+    for (const side of [-1, 1] as const) {
+      const zz = side * (spread + i * 0.18);
+      const yy = (i - (count - 1) / 2) * 0.16;
+      add(g, new THREE.CylinderGeometry(0.1, 0.16, 0.42, 12), dark, x, yy, zz, 0, 0, Math.PI / 2);
+      add(g, new THREE.CylinderGeometry(0.07, 0.07, 0.2, 10), glow, x - 0.22, yy, zz, 0, 0, Math.PI / 2);
+      add(g, new THREE.SphereGeometry(0.09, 10, 8), glow, x - 0.32, yy, zz);
+    }
   }
 }
 
-/** Big silly eyes + smile so every hull looks like a cartoon menace. */
-function addGoofFace(
+/** Sleek anime cockpit visor instead of cartoon eyes. */
+function addAnimeCockpit(
   g: THREE.Group,
-  _glass: THREE.Material,
-  accent: THREE.Material,
-  id: ShipId,
+  glass: THREE.Material,
+  glow: THREE.Material,
+  chrome: THREE.Material,
+  x: number,
+  y: number,
+  wide: number,
 ): void {
-  const heavy = id === 'solhammer' || id === 'bulwark' || id === 'brood' || id === 'glacier';
-  const tiny = id === 'zephyr' || id === 'shade' || id === 'scuttle';
-  const eyeR = heavy ? 0.22 : tiny ? 0.11 : 0.16;
-  const pupilR = eyeR * 0.42;
-  const spread = heavy ? 0.38 : tiny ? 0.16 : 0.26;
-  const noseX = heavy ? 0.85 : tiny ? 0.55 : 0.7;
-  const eyeY = heavy ? 0.38 : tiny ? 0.14 : 0.22;
-
-  const white = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  const pupil = new THREE.MeshBasicMaterial({ color: 0x12203a });
-  for (const side of [-1, 1] as const) {
-    add(g, new THREE.SphereGeometry(eyeR, 12, 10), white, noseX, eyeY, side * spread);
-    add(
-      g,
-      new THREE.SphereGeometry(pupilR, 10, 8),
-      pupil,
-      noseX + eyeR * 0.35,
-      eyeY - pupilR * 0.15,
-      side * spread,
-    );
-  }
-  // Little brow / blush for extra silly
-  add(g, new THREE.BoxGeometry(eyeR * 1.6, 0.04, 0.06), accent, noseX - 0.05, eyeY + eyeR * 0.9, spread);
-  add(g, new THREE.BoxGeometry(eyeR * 1.6, 0.04, 0.06), accent, noseX - 0.05, eyeY + eyeR * 0.9, -spread);
-  const smile = new THREE.Mesh(
-    new THREE.TorusGeometry(eyeR * 1.1, 0.035, 6, 16, Math.PI),
-    new THREE.MeshBasicMaterial({ color: 0xffe566 }),
-  );
-  smile.position.set(noseX + 0.05, eyeY - eyeR * 1.15, 0);
-  smile.rotation.z = Math.PI;
-  smile.rotation.y = Math.PI / 2;
-  g.add(smile);
+  add(g, new THREE.SphereGeometry(wide * 0.55, 16, 12), glass, x, y, 0);
+  const canopy = add(g, new THREE.SphereGeometry(wide * 0.58, 16, 12), chrome, x - 0.05, y - 0.02, 0);
+  canopy.scale.set(1.05, 0.55, 1.15);
+  add(g, new THREE.BoxGeometry(wide * 0.9, 0.04, wide * 1.3), glow, x - 0.05, y + wide * 0.25, 0);
+  add(g, new THREE.BoxGeometry(0.08, 0.06, wide * 1.1), glow, x + wide * 0.15, y, 0);
 }
 
-/** Build a detailed textured 3D ship. Nose points +X (angle 0). */
+function addEnergyCore(g: THREE.Group, glow: THREE.Material, x: number, y: number, r = 0.22): void {
+  add(g, new THREE.SphereGeometry(r, 14, 12), glow, x, y, 0);
+  add(g, new THREE.TorusGeometry(r * 1.35, 0.035, 8, 24), glow, x, y, 0, Math.PI / 2);
+  add(g, new THREE.TorusGeometry(r * 1.35, 0.03, 8, 24), glow, x, y, 0, 0, 0, Math.PI / 2);
+}
+
+/** Build a flashy anime sci-fi ship. Nose points +X. */
 export function buildShipMesh(id: ShipId): THREE.Group {
   const def = SHIPS[id];
   const g = new THREE.Group();
   g.name = id;
   const seed = id.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
   const body = hullMat(def.color, def.accent, seed, styleFor(id));
-  const accent = glowMat(def.accent, 1.15);
+  const accent = glowMat(def.accent, 2.4);
+  const neon = glowMat(def.color, 1.8);
   const dark = darkMat(seed);
   const glass = glassMat(def.accent);
+  const chrome = chromeMat(def.accent);
 
   switch (id) {
     case 'solhammer': {
-      add(g, new THREE.BoxGeometry(2.6, 0.65, 1.2), body, -0.05);
-      add(g, new THREE.BoxGeometry(1.4, 0.35, 1.35), dark, -0.3, 0.28);
-      add(g, new THREE.ConeGeometry(0.5, 1.35, 7), body, 1.55, 0, 0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.BoxGeometry(1.4, 0.14, 0.65), dark, -0.55, 0, 0.85);
-      add(g, new THREE.BoxGeometry(1.4, 0.14, 0.65), dark, -0.55, 0, -0.85);
-      add(g, new THREE.BoxGeometry(0.7, 0.45, 0.5), accent, 0.15, 0.45);
-      add(g, new THREE.BoxGeometry(0.35, 0.2, 0.35), glass, 0.35, 0.62);
-      addGreebles(g, dark, -0.4, 0.2, 0, 8, seed);
-      addWindows(g, glass, 0.8, 0.15, 0.55, 4, 0.22);
-      addThrusterPair(g, accent, dark, -1.45, 0.35);
-      add(g, new THREE.CylinderGeometry(0.08, 0.08, 0.5, 8), dark, 0.9, 0.55, 0.3);
+      // Heavy anime battleship - hammer prow + tower bridge
+      add(g, new THREE.BoxGeometry(2.4, 0.7, 1.15), body, -0.1);
+      add(g, new THREE.BoxGeometry(1.5, 0.45, 1.45), dark, -0.35, 0.35);
+      add(g, new THREE.BoxGeometry(0.9, 0.9, 0.7), body, 0.2, 0.55);
+      add(g, new THREE.BoxGeometry(1.1, 0.35, 1.6), neon, 0.9, 0.15);
+      add(g, new THREE.ConeGeometry(0.55, 1.5, 6), chrome, 1.7, 0, 0, 0, 0, -Math.PI / 2);
+      addFin(g, dark, -0.6, 0.55, 0.7, 0.9, 0.7, 0.08, 0.4);
+      addFin(g, dark, -0.6, 0.55, -0.7, 0.9, 0.7, 0.08, -0.4);
+      addAnimeCockpit(g, glass, accent, chrome, 0.55, 0.72, 0.42);
+      addEnergyCore(g, accent, 0.15, 0.85, 0.16);
+      addThrusterCluster(g, accent, dark, -1.55, 0.38, 2);
       break;
     }
     case 'zephyr': {
-      add(g, new THREE.ConeGeometry(0.32, 2.3, 8), body, 0, 0, 0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.BoxGeometry(0.85, 0.05, 1.7), accent, -0.15);
-      add(g, new THREE.BoxGeometry(0.5, 0.04, 0.9), dark, -0.7, 0.08);
-      add(g, new THREE.SphereGeometry(0.1, 8, 8), glass, 0.7, 0.08);
-      add(g, new THREE.BoxGeometry(0.35, 0.5, 0.05), dark, -0.9, 0.15);
-      addThrusterPair(g, accent, dark, -1.15, 0.18);
-      addGreebles(g, dark, -0.2, 0.05, 0, 4, seed);
+      // Needle interceptor - long blade + translucent canards
+      add(g, new THREE.ConeGeometry(0.28, 2.8, 7), body, 0.1, 0, 0, 0, 0, -Math.PI / 2);
+      add(g, new THREE.CylinderGeometry(0.12, 0.22, 1.6, 8), chrome, -0.2, 0, 0, 0, 0, Math.PI / 2);
+      addWing(g, body, neon, 1, 1.5, 1.1);
+      addWing(g, body, neon, -1, 1.5, 1.1);
+      add(g, new THREE.BoxGeometry(0.7, 0.04, 0.9), accent, -0.85, 0.12);
+      addAnimeCockpit(g, glass, accent, chrome, 0.75, 0.12, 0.28);
+      addThrusterCluster(g, accent, dark, -1.35, 0.2, 1);
       break;
     }
     case 'bulwark': {
-      add(g, new THREE.BoxGeometry(2.1, 1.0, 1.7), body);
-      add(g, new THREE.BoxGeometry(1.6, 0.4, 2.1), dark, -0.1, 0.25);
-      add(g, new THREE.BoxGeometry(0.95, 0.55, 1.0), body, 1.25);
-      add(g, new THREE.CylinderGeometry(0.28, 0.34, 0.45, 10), accent, 0.55, 0.7);
-      add(g, new THREE.BoxGeometry(0.55, 0.12, 0.12), dark, 0.95, 0.75);
-      add(g, new THREE.BoxGeometry(0.2, 0.7, 1.9), dark, -0.9, 0);
-      addWindows(g, glass, 0.6, 0.35, 0.75, 3, 0.25);
-      addGreebles(g, dark, -0.2, 0.1, 0.6, 10, seed);
-      addThrusterPair(g, accent, dark, -1.2, 0.45);
+      // Flying fortress - thick armor plates + glowing shield rim
+      add(g, new THREE.BoxGeometry(2.0, 1.15, 1.8), body);
+      add(g, new THREE.BoxGeometry(1.5, 0.35, 2.15), dark, -0.15, 0.45);
+      add(g, new THREE.BoxGeometry(1.1, 0.7, 1.1), body, 1.2, 0.1);
+      add(g, new THREE.TorusGeometry(1.05, 0.07, 10, 36), neon, 0.1, 0.1, 0, 0, Math.PI / 2);
+      add(g, new THREE.CylinderGeometry(0.32, 0.4, 0.5, 12), accent, 0.4, 0.85);
+      addFin(g, dark, -0.95, 0.2, 0.95, 0.7, 0.9, 0.1, 0.2);
+      addFin(g, dark, -0.95, 0.2, -0.95, 0.7, 0.9, 0.1, -0.2);
+      addAnimeCockpit(g, glass, accent, chrome, 0.85, 0.55, 0.4);
+      addThrusterCluster(g, accent, dark, -1.25, 0.5, 2);
       break;
     }
     case 'shade': {
-      add(g, new THREE.ConeGeometry(0.26, 2.4, 4), body, 0, 0, 0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.BoxGeometry(1.0, 0.06, 1.0), dark, -0.25, 0, 0, 0, Math.PI / 4);
-      add(g, new THREE.BoxGeometry(0.7, 0.04, 0.7), accent, -0.5, 0.06, 0, 0, Math.PI / 5);
-      add(g, new THREE.SphereGeometry(0.14, 10, 10), accent, 0.55, 0.12);
-      add(g, new THREE.SphereGeometry(0.07, 8, 8), glass, 0.85, 0.05, 0.12);
-      add(g, new THREE.SphereGeometry(0.07, 8, 8), glass, 0.85, 0.05, -0.12);
-      addThrusterPair(g, accent, dark, -1.2, 0.15);
+      // Assassin dart - razor diamond + cloak fins
+      add(g, new THREE.ConeGeometry(0.22, 2.6, 4), body, 0.05, 0, 0, 0, 0, -Math.PI / 2);
+      add(g, new THREE.OctahedronGeometry(0.45, 0), chrome, 0.2, 0.05);
+      add(g, new THREE.BoxGeometry(1.2, 0.05, 1.15), dark, -0.35, 0, 0, 0, Math.PI / 4);
+      add(g, new THREE.BoxGeometry(0.9, 0.04, 0.9), neon, -0.55, 0.08, 0, 0, Math.PI / 5);
+      add(g, new THREE.SphereGeometry(0.16, 12, 10), accent, 0.7, 0.1);
+      addAnimeCockpit(g, glass, accent, chrome, 0.55, 0.14, 0.22);
+      addThrusterCluster(g, accent, dark, -1.3, 0.14, 1);
       break;
     }
     case 'prism': {
-      const crystal = add(g, new THREE.OctahedronGeometry(0.75, 0), body);
-      crystal.scale.set(1.9, 0.55, 1.05);
-      crystal.rotation.z = Math.PI / 2;
-      add(g, new THREE.OctahedronGeometry(0.28, 0), accent, 1.2);
-      add(g, new THREE.OctahedronGeometry(0.18, 0), glass, 0.2, 0.35);
-      add(g, new THREE.OctahedronGeometry(0.14, 0), glass, -0.3, -0.25, 0.3);
-      add(g, new THREE.BoxGeometry(0.4, 0.08, 0.9), dark, -0.8);
-      addThrusterPair(g, accent, dark, -1.15, 0.22);
+      // Crystal gunship - stacked gem hull + light wings
+      const gem = add(g, new THREE.OctahedronGeometry(0.85, 0), body);
+      gem.scale.set(2.1, 0.5, 1.1);
+      gem.rotation.z = Math.PI / 2;
+      add(g, new THREE.OctahedronGeometry(0.35, 0), accent, 1.35);
+      add(g, new THREE.OctahedronGeometry(0.22, 0), glass, 0.3, 0.4);
+      add(g, new THREE.OctahedronGeometry(0.18, 0), neon, -0.4, -0.25, 0.35);
+      addWing(g, chrome, accent, 1, 1.2, 0.9);
+      addWing(g, chrome, accent, -1, 1.2, 0.9);
+      addEnergyCore(g, accent, 0.1, 0.35, 0.18);
+      addThrusterCluster(g, accent, dark, -1.25, 0.25, 1);
       break;
     }
     case 'brood': {
-      const bodyM = add(g, new THREE.SphereGeometry(0.75, 16, 12), body);
-      bodyM.scale.set(1.45, 0.72, 1.15);
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2;
-        add(
-          g,
-          new THREE.SphereGeometry(0.2, 10, 8),
-          accent,
-          -0.25 + Math.cos(a) * 0.2,
-          0.2,
-          Math.sin(a) * 0.75,
-        );
-      }
-      add(g, new THREE.ConeGeometry(0.4, 0.9, 8), dark, 1.0, 0, 0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.TorusGeometry(0.35, 0.06, 8, 16), accent, 0.5, 0, 0, 0, Math.PI / 2);
-      addGreebles(g, dark, -0.5, 0.1, 0, 6, seed);
-      addThrusterPair(g, accent, dark, -1.2, 0.3);
-      break;
-    }
-    case 'cinder': {
-      add(g, new THREE.CylinderGeometry(0.22, 0.38, 2.0, 10), body, 0, 0, 0, 0, 0, Math.PI / 2);
-      add(g, new THREE.ConeGeometry(0.22, 0.8, 10), accent, 1.25, 0, 0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.BoxGeometry(1.0, 0.07, 0.4), dark, -0.15, 0, 0.5, 0, 0, 0.3);
-      add(g, new THREE.BoxGeometry(1.0, 0.07, 0.4), dark, -0.15, 0, -0.5, 0, 0, -0.3);
-      add(g, new THREE.BoxGeometry(0.5, 0.35, 0.08), dark, -0.85, 0.15);
-      add(g, new THREE.SphereGeometry(0.12, 8, 8), glass, 0.5, 0.18);
-      addGreebles(g, dark, -0.3, 0.1, 0, 5, seed);
-      add(g, new THREE.SphereGeometry(0.16, 10, 8), accent, -1.15);
-      break;
-    }
-    case 'grappler': {
-      add(g, new THREE.BoxGeometry(1.65, 0.5, 1.0), body);
-      add(g, new THREE.BoxGeometry(0.9, 0.3, 0.7), dark, -0.5, 0.25);
-      add(g, new THREE.BoxGeometry(1.4, 0.14, 0.16), accent, 0.45, 0, 0.75, 0, 0.45);
-      add(g, new THREE.BoxGeometry(1.4, 0.14, 0.16), accent, 0.45, 0, -0.75, 0, -0.45);
-      add(g, new THREE.ConeGeometry(0.14, 0.45, 5), dark, 1.2, 0, 1.0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.ConeGeometry(0.14, 0.45, 5), dark, 1.2, 0, -1.0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.BoxGeometry(0.25, 0.2, 0.25), glass, 0.5, 0.35);
-      addGreebles(g, dark, 0, 0.15, 0, 7, seed);
-      addThrusterPair(g, accent, dark, -1.0, 0.28);
-      break;
-    }
-    case 'scuttle': {
-      const bug = add(g, new THREE.SphereGeometry(0.5, 14, 10), body);
-      bug.scale.set(1.55, 0.65, 1.05);
-      add(g, new THREE.ConeGeometry(0.22, 1.0, 6), dark, -0.95, 0, 0, 0, 0, Math.PI / 2);
-      add(g, new THREE.SphereGeometry(0.13, 8, 8), accent, 0.5, 0.18, 0.22);
-      add(g, new THREE.SphereGeometry(0.13, 8, 8), accent, 0.5, 0.18, -0.22);
-      add(g, new THREE.SphereGeometry(0.06, 6, 6), glass, 0.58, 0.2, 0.22);
-      add(g, new THREE.SphereGeometry(0.06, 6, 6), glass, 0.58, 0.2, -0.22);
-      for (let i = 0; i < 3; i++) {
-        add(g, new THREE.CylinderGeometry(0.03, 0.03, 0.45, 5), dark, -0.1 - i * 0.2, -0.2, 0.35, 0.6);
-        add(g, new THREE.CylinderGeometry(0.03, 0.03, 0.45, 5), dark, -0.1 - i * 0.2, -0.2, -0.35, -0.6);
-      }
-      addThrusterPair(g, accent, dark, -1.15, 0.12);
-      break;
-    }
-    case 'nullpoint': {
-      add(g, new THREE.TorusGeometry(0.6, 0.14, 12, 32), body, 0, 0, 0, 0, Math.PI / 2);
-      add(g, new THREE.TorusGeometry(0.4, 0.06, 8, 24), accent, 0, 0, 0, Math.PI / 2);
-      add(g, new THREE.SphereGeometry(0.32, 16, 16), accent);
-      add(g, new THREE.ConeGeometry(0.16, 1.15, 6), dark, 1.0, 0, 0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.ConeGeometry(0.1, 0.6, 5), dark, -0.9, 0.2, 0.2, 0.4, 0, Math.PI / 2);
-      add(g, new THREE.ConeGeometry(0.1, 0.6, 5), dark, -0.9, -0.2, -0.2, -0.4, 0, Math.PI / 2);
-      addThrusterPair(g, accent, dark, -0.7, 0.35);
-      break;
-    }
-    case 'stormlance': {
-      add(g, new THREE.CylinderGeometry(0.14, 0.2, 2.4, 8), body, 0, 0, 0, 0, 0, Math.PI / 2);
-      add(g, new THREE.ConeGeometry(0.22, 0.8, 5), accent, 1.45, 0, 0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.BoxGeometry(0.7, 0.05, 1.25), dark, -0.15);
-      add(g, new THREE.BoxGeometry(0.4, 0.4, 0.05), accent, -0.5, 0.15);
-      add(g, new THREE.SphereGeometry(0.1, 8, 8), glass, 0.4, 0.15);
-      addGreebles(g, dark, -0.4, 0.08, 0, 5, seed);
-      addThrusterPair(g, accent, dark, -1.25, 0.2);
-      break;
-    }
-    case 'mirage': {
-      const blade = add(g, new THREE.TetrahedronGeometry(0.6, 0), body);
-      blade.scale.set(2.3, 0.48, 0.95);
-      blade.rotation.z = Math.PI / 2;
-      add(g, new THREE.TetrahedronGeometry(0.25, 0), accent, 0.9, 0.1);
-      add(g, new THREE.SphereGeometry(0.18, 10, 10), glass, 0.25, 0.18);
-      add(g, new THREE.BoxGeometry(0.6, 0.04, 0.8), dark, -0.6);
-      addThrusterPair(g, accent, dark, -1.1, 0.18);
-      break;
-    }
-    case 'harrier': {
-      add(g, new THREE.BoxGeometry(2.15, 0.42, 0.75), body);
-      add(g, new THREE.BoxGeometry(1.0, 0.08, 2.0), dark, -0.05);
-      add(g, new THREE.ConeGeometry(0.3, 0.9, 6), body, 1.4, 0, 0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.SphereGeometry(0.22, 10, 8), accent, 0.25, -0.28);
-      add(g, new THREE.SphereGeometry(0.16, 8, 8), accent, -0.15, -0.28);
-      add(g, new THREE.BoxGeometry(0.35, 0.18, 0.3), glass, 0.5, 0.28);
-      add(g, new THREE.BoxGeometry(0.45, 0.55, 0.06), dark, -0.95, 0.15);
-      addGreebles(g, dark, -0.3, 0.1, 0, 6, seed);
-      addThrusterPair(g, accent, dark, -1.2, 0.25);
-      break;
-    }
-    case 'minewright': {
-      add(g, new THREE.BoxGeometry(1.75, 0.75, 1.4), body);
-      add(g, new THREE.BoxGeometry(1.2, 0.25, 1.55), dark, -0.1, 0.35);
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2 + 0.3;
-        add(
-          g,
-          new THREE.SphereGeometry(0.16, 8, 8),
-          accent,
-          Math.cos(a) * 0.65,
-          0.25,
-          Math.sin(a) * 0.75,
-        );
-      }
-      add(g, new THREE.BoxGeometry(0.4, 0.25, 0.35), glass, 0.55, 0.4);
-      addGreebles(g, dark, -0.3, 0, 0, 9, seed);
-      addThrusterPair(g, accent, dark, -1.05, 0.4);
-      break;
-    }
-    case 'razorwing': {
-      add(g, new THREE.ConeGeometry(0.28, 2.0, 4), body, 0, 0, 0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.BoxGeometry(1.15, 0.05, 0.4), accent, 0.05, 0, 0.6, 0, 0.55);
-      add(g, new THREE.BoxGeometry(1.15, 0.05, 0.4), accent, 0.05, 0, -0.6, 0, -0.55);
-      add(g, new THREE.BoxGeometry(0.7, 0.04, 0.25), dark, -0.4, 0, 0.85, 0, 0.3);
-      add(g, new THREE.BoxGeometry(0.7, 0.04, 0.25), dark, -0.4, 0, -0.85, 0, -0.3);
-      add(g, new THREE.SphereGeometry(0.09, 8, 8), glass, 0.6, 0.12);
-      addThrusterPair(g, accent, dark, -1.1, 0.15);
-      break;
-    }
-    case 'glacier': {
-      add(g, new THREE.BoxGeometry(1.95, 0.95, 1.6), body);
-      add(g, new THREE.OctahedronGeometry(0.5, 0), accent, 1.0, 0.4);
-      add(g, new THREE.OctahedronGeometry(0.28, 0), glass, 0.4, 0.55, 0.4);
-      add(g, new THREE.BoxGeometry(1.3, 0.28, 0.55), dark, -0.15, -0.45);
-      add(g, new THREE.BoxGeometry(0.3, 0.8, 1.7), dark, -0.85);
-      addWindows(g, glass, 0.5, 0.3, 0.7, 3, 0.28);
-      addGreebles(g, dark, -0.2, 0.15, 0.5, 8, seed);
-      addThrusterPair(g, accent, dark, -1.15, 0.4);
-      break;
-    }
-    case 'swarmlord': {
-      const nest = add(g, new THREE.SphereGeometry(0.7, 14, 12), body);
-      nest.scale.set(1.35, 0.7, 1.15);
+      // Bio-carrier - segmented abdomen + glowing pods
+      const abdomen = add(g, new THREE.SphereGeometry(0.8, 18, 14), body);
+      abdomen.scale.set(1.55, 0.7, 1.2);
+      add(g, new THREE.ConeGeometry(0.42, 1.1, 8), dark, 1.15, 0, 0, 0, 0, -Math.PI / 2);
       for (let i = 0; i < 8; i++) {
         const a = (i / 8) * Math.PI * 2;
         add(
           g,
-          new THREE.SphereGeometry(0.11, 8, 6),
+          new THREE.SphereGeometry(0.16, 10, 8),
           accent,
-          Math.cos(a) * 0.75,
-          0.22,
-          Math.sin(a) * 0.6,
+          -0.2 + Math.cos(a) * 0.15,
+          0.25,
+          Math.sin(a) * 0.85,
         );
       }
-      add(g, new THREE.ConeGeometry(0.3, 0.7, 7), dark, 1.0, 0, 0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.TorusGeometry(0.45, 0.05, 8, 20), accent, 0.2, 0.15, 0, 0.4);
-      addThrusterPair(g, accent, dark, -1.1, 0.28);
+      add(g, new THREE.TorusGeometry(0.5, 0.06, 8, 20), neon, 0.55, 0.05, 0, 0, Math.PI / 2);
+      addAnimeCockpit(g, glass, accent, chrome, 0.85, 0.28, 0.32);
+      addThrusterCluster(g, accent, dark, -1.3, 0.32, 2);
+      break;
+    }
+    case 'cinder': {
+      // Flame racer - arrow body + swept fire wings
+      add(g, new THREE.CylinderGeometry(0.18, 0.36, 2.2, 10), body, 0, 0, 0, 0, 0, Math.PI / 2);
+      add(g, new THREE.ConeGeometry(0.2, 1.0, 10), accent, 1.4, 0, 0, 0, 0, -Math.PI / 2);
+      add(g, new THREE.BoxGeometry(1.2, 0.06, 0.45), neon, -0.1, 0, 0.55, 0, 0, 0.45);
+      add(g, new THREE.BoxGeometry(1.2, 0.06, 0.45), neon, -0.1, 0, -0.55, 0, 0, -0.45);
+      add(g, new THREE.BoxGeometry(0.7, 0.5, 0.06), dark, -0.95, 0.2);
+      addEnergyCore(g, accent, -1.2, 0, 0.18);
+      addAnimeCockpit(g, glass, accent, chrome, 0.45, 0.2, 0.26);
+      addThrusterCluster(g, accent, dark, -1.4, 0.22, 1);
+      break;
+    }
+    case 'grappler': {
+      // Mecha clawship - arms forward + hip thrusters
+      add(g, new THREE.BoxGeometry(1.5, 0.55, 0.95), body);
+      add(g, new THREE.BoxGeometry(0.85, 0.4, 0.7), dark, -0.55, 0.28);
+      for (const side of [-1, 1] as const) {
+        add(g, new THREE.BoxGeometry(1.55, 0.16, 0.18), chrome, 0.55, 0.05, side * 0.85, 0, side * 0.55);
+        add(g, new THREE.ConeGeometry(0.14, 0.55, 5), accent, 1.4, 0, side * 1.15, 0, 0, -Math.PI / 2);
+        add(g, new THREE.BoxGeometry(0.35, 0.35, 0.2), neon, 0.9, 0.15, side * 0.55);
+      }
+      addAnimeCockpit(g, glass, accent, chrome, 0.35, 0.4, 0.3);
+      addThrusterCluster(g, accent, dark, -1.05, 0.32, 2);
+      break;
+    }
+    case 'scuttle': {
+      // Cute bug mecha - round shell + antenna + back boosters
+      const shell = add(g, new THREE.SphereGeometry(0.55, 16, 12), body);
+      shell.scale.set(1.65, 0.68, 1.15);
+      add(g, new THREE.ConeGeometry(0.2, 0.9, 6), dark, -1.05, 0.05, 0, 0, 0, Math.PI / 2);
+      add(g, new THREE.SphereGeometry(0.14, 10, 8), accent, 0.55, 0.22, 0.28);
+      add(g, new THREE.SphereGeometry(0.14, 10, 8), accent, 0.55, 0.22, -0.28);
+      add(g, new THREE.CylinderGeometry(0.025, 0.025, 0.55, 6), chrome, 0.75, 0.45, 0.2, 0.6);
+      add(g, new THREE.CylinderGeometry(0.025, 0.025, 0.55, 6), chrome, 0.75, 0.45, -0.2, -0.6);
+      for (let i = 0; i < 3; i++) {
+        add(g, new THREE.CylinderGeometry(0.03, 0.03, 0.5, 5), dark, -0.15 - i * 0.22, -0.22, 0.4, 0.7);
+        add(g, new THREE.CylinderGeometry(0.03, 0.03, 0.5, 5), dark, -0.15 - i * 0.22, -0.22, -0.4, -0.7);
+      }
+      addAnimeCockpit(g, glass, accent, chrome, 0.35, 0.28, 0.28);
+      addThrusterCluster(g, accent, dark, -1.25, 0.16, 1);
+      break;
+    }
+    case 'nullpoint': {
+      // Void ringship - dual halo + core
+      add(g, new THREE.TorusGeometry(0.72, 0.13, 14, 40), body, 0, 0, 0, 0, Math.PI / 2);
+      add(g, new THREE.TorusGeometry(0.5, 0.06, 10, 32), neon, 0, 0, 0, Math.PI / 2);
+      add(g, new THREE.TorusGeometry(0.95, 0.04, 8, 40), accent, 0, 0, 0, 0.4, Math.PI / 2);
+      addEnergyCore(g, accent, 0, 0, 0.28);
+      add(g, new THREE.ConeGeometry(0.14, 1.2, 6), chrome, 1.15, 0, 0, 0, 0, -Math.PI / 2);
+      add(g, new THREE.ConeGeometry(0.1, 0.7, 5), dark, -1.0, 0.25, 0.25, 0.5, 0, Math.PI / 2);
+      add(g, new THREE.ConeGeometry(0.1, 0.7, 5), dark, -1.0, -0.25, -0.25, -0.5, 0, Math.PI / 2);
+      addThrusterCluster(g, accent, dark, -0.75, 0.4, 1);
+      break;
+    }
+    case 'stormlance': {
+      // Lightning lance - ultra long rail + wing sparkers
+      add(g, new THREE.CylinderGeometry(0.12, 0.2, 2.9, 8), body, 0.1, 0, 0, 0, 0, Math.PI / 2);
+      add(g, new THREE.ConeGeometry(0.2, 1.0, 5), accent, 1.7, 0, 0, 0, 0, -Math.PI / 2);
+      add(g, new THREE.BoxGeometry(0.9, 0.05, 1.55), dark, -0.2);
+      add(g, new THREE.BoxGeometry(0.35, 0.55, 0.06), neon, -0.55, 0.2);
+      add(g, new THREE.BoxGeometry(0.35, 0.55, 0.06), neon, -0.55, 0.2, 0);
+      addWing(g, body, accent, 1, 1.35, 0.85);
+      addWing(g, body, accent, -1, 1.35, 0.85);
+      addAnimeCockpit(g, glass, accent, chrome, 0.35, 0.18, 0.24);
+      addThrusterCluster(g, accent, dark, -1.4, 0.22, 1);
+      break;
+    }
+    case 'mirage': {
+      // Illusion blade - mirrored tetra + ghost trail fins
+      const blade = add(g, new THREE.TetrahedronGeometry(0.7, 0), body);
+      blade.scale.set(2.5, 0.42, 1.05);
+      blade.rotation.z = Math.PI / 2;
+      add(g, new THREE.TetrahedronGeometry(0.3, 0), neon, 1.05, 0.12);
+      add(g, new THREE.TetrahedronGeometry(0.22, 0), glass, -0.4, 0.2, 0.35);
+      add(g, new THREE.BoxGeometry(0.8, 0.04, 1.0), chrome, -0.7);
+      addAnimeCockpit(g, glass, accent, chrome, 0.35, 0.2, 0.24);
+      addThrusterCluster(g, accent, dark, -1.2, 0.2, 1);
+      break;
+    }
+    case 'harrier': {
+      // Dive bomber - swept gull wings + belly racks
+      add(g, new THREE.BoxGeometry(2.2, 0.38, 0.7), body);
+      add(g, new THREE.ConeGeometry(0.28, 1.0, 6), body, 1.45, 0, 0, 0, 0, -Math.PI / 2);
+      add(g, new THREE.BoxGeometry(1.1, 0.07, 2.3), dark, 0.05, 0.05);
+      add(g, new THREE.BoxGeometry(0.9, 0.06, 0.35), neon, 0.1, 0.1, 0.95, 0, 0, 0.35);
+      add(g, new THREE.BoxGeometry(0.9, 0.06, 0.35), neon, 0.1, 0.1, -0.95, 0, 0, -0.35);
+      add(g, new THREE.SphereGeometry(0.2, 10, 8), accent, 0.3, -0.28);
+      add(g, new THREE.SphereGeometry(0.15, 8, 8), accent, -0.15, -0.28);
+      addAnimeCockpit(g, glass, accent, chrome, 0.55, 0.28, 0.28);
+      addThrusterCluster(g, accent, dark, -1.25, 0.28, 2);
+      break;
+    }
+    case 'minewright': {
+      // Industrial minelayer - cargo bay + orbit pods
+      add(g, new THREE.BoxGeometry(1.85, 0.85, 1.45), body);
+      add(g, new THREE.BoxGeometry(1.25, 0.3, 1.65), dark, -0.1, 0.45);
+      for (let i = 0; i < 7; i++) {
+        const a = (i / 7) * Math.PI * 2 + 0.2;
+        add(
+          g,
+          new THREE.SphereGeometry(0.14, 8, 8),
+          accent,
+          Math.cos(a) * 0.7,
+          0.3,
+          Math.sin(a) * 0.8,
+        );
+      }
+      add(g, new THREE.TorusGeometry(0.75, 0.05, 8, 28), neon, 0, 0.2, 0, Math.PI / 2);
+      addAnimeCockpit(g, glass, accent, chrome, 0.6, 0.5, 0.32);
+      addThrusterCluster(g, accent, dark, -1.15, 0.42, 2);
+      break;
+    }
+    case 'razorwing': {
+      // Variable fighter - X-wing vibes + face blades
+      add(g, new THREE.ConeGeometry(0.26, 2.15, 5), body, 0, 0, 0, 0, 0, -Math.PI / 2);
+      for (const side of [-1, 1] as const) {
+        add(g, new THREE.BoxGeometry(1.35, 0.05, 0.42), neon, 0.1, side * 0.12, side * 0.65, side * 0.35, 0, side * 0.55);
+        add(g, new THREE.BoxGeometry(0.9, 0.04, 0.28), chrome, -0.35, side * 0.2, side * 0.95, 0, 0, side * 0.4);
+      }
+      add(g, new THREE.BoxGeometry(0.5, 0.35, 0.08), dark, -0.9, 0.2);
+      addAnimeCockpit(g, glass, accent, chrome, 0.55, 0.16, 0.24);
+      addThrusterCluster(g, accent, dark, -1.2, 0.22, 1);
+      break;
+    }
+    case 'glacier': {
+      // Ice dreadnought - crystal prow + thick flanks
+      add(g, new THREE.BoxGeometry(2.0, 1.05, 1.65), body);
+      add(g, new THREE.OctahedronGeometry(0.55, 0), accent, 1.15, 0.35);
+      add(g, new THREE.OctahedronGeometry(0.3, 0), glass, 0.45, 0.65, 0.4);
+      add(g, new THREE.BoxGeometry(1.4, 0.3, 0.6), dark, -0.2, -0.5);
+      add(g, new THREE.BoxGeometry(0.35, 0.9, 1.8), dark, -0.95);
+      add(g, new THREE.TorusGeometry(0.85, 0.05, 8, 28), neon, 0.2, 0.15, 0, 0, Math.PI / 2);
+      addAnimeCockpit(g, glass, accent, chrome, 0.55, 0.55, 0.38);
+      addThrusterCluster(g, accent, dark, -1.25, 0.45, 2);
+      break;
+    }
+    case 'swarmlord': {
+      // Hive mothership - honeycomb core + drone rails
+      const nest = add(g, new THREE.SphereGeometry(0.75, 16, 14), body);
+      nest.scale.set(1.4, 0.72, 1.2);
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2;
+        add(
+          g,
+          new THREE.SphereGeometry(0.1, 8, 6),
+          accent,
+          Math.cos(a) * 0.85,
+          0.25,
+          Math.sin(a) * 0.65,
+        );
+      }
+      add(g, new THREE.ConeGeometry(0.32, 0.85, 7), dark, 1.1, 0, 0, 0, 0, -Math.PI / 2);
+      add(g, new THREE.TorusGeometry(0.55, 0.05, 8, 24), neon, 0.15, 0.2, 0, 0.45);
+      addAnimeCockpit(g, glass, accent, chrome, 0.55, 0.32, 0.3);
+      addThrusterCluster(g, accent, dark, -1.2, 0.3, 2);
       break;
     }
     case 'pulsejet': {
-      add(g, new THREE.CylinderGeometry(0.38, 0.48, 1.75, 12), body, 0, 0, 0, 0, 0, Math.PI / 2);
-      add(g, new THREE.TorusGeometry(0.45, 0.09, 10, 24), accent, 0.25, 0, 0, 0, Math.PI / 2);
-      add(g, new THREE.TorusGeometry(0.38, 0.05, 8, 20), dark, -0.2, 0, 0, 0, Math.PI / 2);
-      add(g, new THREE.ConeGeometry(0.32, 0.8, 10), dark, 1.25, 0, 0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.BoxGeometry(0.3, 0.2, 0.25), glass, 0.35, 0.35);
-      addGreebles(g, dark, -0.4, 0.15, 0, 6, seed);
-      add(g, new THREE.SphereGeometry(0.18, 10, 8), accent, -1.05);
+      // Pulse fighter - ring intakes + fat engine
+      add(g, new THREE.CylinderGeometry(0.36, 0.48, 1.9, 14), body, 0, 0, 0, 0, 0, Math.PI / 2);
+      add(g, new THREE.TorusGeometry(0.52, 0.1, 12, 28), neon, 0.35, 0, 0, 0, Math.PI / 2);
+      add(g, new THREE.TorusGeometry(0.42, 0.06, 10, 24), accent, -0.25, 0, 0, 0, Math.PI / 2);
+      add(g, new THREE.ConeGeometry(0.3, 0.9, 10), chrome, 1.35, 0, 0, 0, 0, -Math.PI / 2);
+      addEnergyCore(g, accent, -1.15, 0, 0.2);
+      addAnimeCockpit(g, glass, accent, chrome, 0.4, 0.38, 0.3);
+      addThrusterCluster(g, accent, dark, -1.35, 0.28, 1);
       break;
     }
     case 'railfox': {
-      add(g, new THREE.BoxGeometry(2.55, 0.28, 0.4), body);
-      add(g, new THREE.CylinderGeometry(0.09, 0.12, 1.6, 8), accent, 0.5, 0.16, 0, 0, 0, Math.PI / 2);
-      add(g, new THREE.CylinderGeometry(0.06, 0.08, 1.2, 6), dark, 0.7, -0.1, 0.12, 0, 0, Math.PI / 2);
-      add(g, new THREE.BoxGeometry(0.55, 0.45, 0.08), dark, -0.9, 0.18);
-      add(g, new THREE.BoxGeometry(0.35, 0.15, 0.55), body, -0.3, 0.2);
-      add(g, new THREE.BoxGeometry(0.2, 0.12, 0.18), glass, 0.2, 0.28);
-      addGreebles(g, dark, -0.2, 0.05, 0, 5, seed);
-      addThrusterPair(g, accent, dark, -1.35, 0.12);
+      // Sniper rifleship - absurd barrel + tiny cockpit
+      add(g, new THREE.BoxGeometry(2.9, 0.26, 0.38), body);
+      add(g, new THREE.CylinderGeometry(0.08, 0.12, 2.0, 10), neon, 0.6, 0.18, 0, 0, 0, Math.PI / 2);
+      add(g, new THREE.CylinderGeometry(0.05, 0.08, 1.5, 8), chrome, 0.85, -0.12, 0.14, 0, 0, Math.PI / 2);
+      add(g, new THREE.BoxGeometry(0.6, 0.5, 0.1), dark, -1.05, 0.22);
+      add(g, new THREE.BoxGeometry(0.4, 0.18, 0.6), body, -0.35, 0.22);
+      addAnimeCockpit(g, glass, accent, chrome, 0.1, 0.32, 0.22);
+      addThrusterCluster(g, accent, dark, -1.5, 0.14, 1);
       break;
     }
     case 'sanguine': {
-      add(g, new THREE.ConeGeometry(0.4, 1.8, 5), body, 0, 0, 0, 0, 0, -Math.PI / 2);
-      add(g, new THREE.ConeGeometry(0.1, 0.55, 5), accent, 1.0, 0, 0.28, 0, 0, -Math.PI / 2);
-      add(g, new THREE.ConeGeometry(0.1, 0.55, 5), accent, 1.0, 0, -0.28, 0, 0, -Math.PI / 2);
-      add(g, new THREE.SphereGeometry(0.32, 12, 10), dark, -0.55);
-      add(g, new THREE.SphereGeometry(0.14, 8, 8), accent, -0.55, 0.15);
-      add(g, new THREE.BoxGeometry(0.5, 0.06, 0.7), dark, -0.2, 0.15);
-      add(g, new THREE.SphereGeometry(0.08, 8, 8), glass, 0.45, 0.15, 0.15);
-      addThrusterPair(g, accent, dark, -1.15, 0.2);
+      // Vampire interceptor - fang nose + blood core
+      add(g, new THREE.ConeGeometry(0.38, 2.0, 5), body, 0, 0, 0, 0, 0, -Math.PI / 2);
+      add(g, new THREE.ConeGeometry(0.1, 0.7, 5), accent, 1.15, 0, 0.32, 0, 0, -Math.PI / 2);
+      add(g, new THREE.ConeGeometry(0.1, 0.7, 5), accent, 1.15, 0, -0.32, 0, 0, -Math.PI / 2);
+      add(g, new THREE.SphereGeometry(0.36, 14, 12), dark, -0.6);
+      addEnergyCore(g, accent, -0.55, 0.12, 0.16);
+      add(g, new THREE.BoxGeometry(0.6, 0.05, 0.85), neon, -0.2, 0.18);
+      addAnimeCockpit(g, glass, accent, chrome, 0.4, 0.2, 0.26);
+      addThrusterCluster(g, accent, dark, -1.25, 0.22, 1);
       break;
     }
     default: {
-      add(g, new THREE.ConeGeometry(0.38, 1.8, 6), body, 0, 0, 0, 0, 0, -Math.PI / 2);
-      addThrusterPair(g, accent, dark, -1.0, 0.2);
+      add(g, new THREE.ConeGeometry(0.38, 2.0, 6), body, 0, 0, 0, 0, 0, -Math.PI / 2);
+      addThrusterCluster(g, accent, dark, -1.1, 0.22, 1);
       break;
     }
   }
 
   const exhaust = new THREE.Mesh(
-    new THREE.SphereGeometry(0.2, 10, 10),
+    new THREE.SphereGeometry(0.28, 12, 12),
     new THREE.MeshBasicMaterial({ color: def.accent }),
   );
   exhaust.name = 'exhaust';
-  exhaust.position.set(-1.15 * (def.scale > 1 ? 1.15 : 0.95), 0, 0);
+  exhaust.position.set(-1.25 * (def.scale > 1 ? 1.15 : 0.95), 0, 0);
   exhaust.scale.set(0.01, 0.01, 0.01);
   g.add(exhaust);
 
-  // Googly cartoon face - every scrap heap needs eyes
-  addGoofFace(g, glass, accent, id);
+  // Soft identity halo under the hull
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(1.05, 0.035, 8, 36),
+    new THREE.MeshBasicMaterial({
+      color: def.color,
+      transparent: true,
+      opacity: 0.75,
+    }),
+  );
+  ring.name = 'identity';
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = -0.15;
+  g.add(ring);
+  const badge = new THREE.Mesh(
+    new THREE.SphereGeometry(0.1, 8, 8),
+    new THREE.MeshBasicMaterial({ color: def.accent }),
+  );
+  badge.name = 'identityBadge';
+  badge.position.set(0.2, 0.95, 0);
+  g.add(badge);
 
   const s = 18 * def.scale;
   g.scale.setScalar(s);
@@ -620,7 +645,8 @@ function styleFor(id: ShipId): TexStyle {
     case 'shade':
     case 'zephyr':
     case 'razorwing':
-      return 'carbon';
+    case 'railfox':
+      return 'neon';
     case 'bulwark':
     case 'minewright':
     case 'solhammer':
@@ -636,11 +662,12 @@ function styleFor(id: ShipId): TexStyle {
 
 export function buildDroneMesh(): THREE.Group {
   const g = new THREE.Group();
-  const body = hullMat('#84cc16', '#d9f99d', 42, 'bio', 0.45, 0.4);
-  const glow = glowMat('#d9f99d', 1.2);
-  add(g, new THREE.ConeGeometry(0.22, 0.75, 6), body, 0, 0, 0, 0, 0, -Math.PI / 2);
-  add(g, new THREE.SphereGeometry(0.1, 8, 8), glow, 0.15, 0.08);
-  add(g, new THREE.BoxGeometry(0.25, 0.04, 0.45), body, -0.1);
+  const body = hullMat('#84cc16', '#d9f99d', 42, 'bio', 0.55, 0.3);
+  const glow = glowMat('#d9f99d', 2.0);
+  add(g, new THREE.ConeGeometry(0.2, 0.85, 6), body, 0, 0, 0, 0, 0, -Math.PI / 2);
+  add(g, new THREE.SphereGeometry(0.12, 10, 8), glow, 0.2, 0.08);
+  add(g, new THREE.TorusGeometry(0.22, 0.03, 8, 16), glow, -0.05, 0, 0, 0, Math.PI / 2);
+  add(g, new THREE.BoxGeometry(0.28, 0.04, 0.5), body, -0.15);
   g.scale.setScalar(9);
   g.traverse((obj) => {
     if ((obj as THREE.Mesh).isMesh) {

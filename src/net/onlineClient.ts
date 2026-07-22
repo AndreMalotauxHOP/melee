@@ -17,6 +17,7 @@ export type OnlineEvents = {
   onPeerInput?: (tick: number, bits: number) => void;
   onPeerPick?: (index: number) => void;
   onPeerLeft?: () => void;
+  onRematchStart?: (seed: number) => void;
   onError?: (message: string) => void;
   onStatus?: (status: string) => void;
 };
@@ -84,6 +85,9 @@ export class OnlineClient {
       case 'peer_left':
         this.handlers.onPeerLeft?.();
         break;
+      case 'rematch_start':
+        this.handlers.onRematchStart?.(msg.seed);
+        break;
       case 'error':
         this.handlers.onError?.(msg.message);
         break;
@@ -118,6 +122,10 @@ export class OnlineClient {
 
   sendPick(index: number): void {
     this.send({ type: 'pick', index });
+  }
+
+  rematch(): void {
+    this.send({ type: 'rematch' });
   }
 
   disconnect(): void {

@@ -121,3 +121,125 @@ export function combatMods(ups: PlayerUpgrades): {
 export function cloneUpgrades(ups: PlayerUpgrades): PlayerUpgrades {
   return { ...ups };
 }
+
+/** Narrative shop bets - greed vs safety between bouts. */
+export type ShopBetId = 'greed' | 'safe' | 'insurance';
+
+export interface ShopBetDef {
+  id: ShopBetId;
+  name: string;
+  desc: string;
+  cost: number;
+}
+
+export const SHOP_BETS: ShopBetDef[] = [
+  {
+    id: 'safe',
+    name: 'Safe Stash',
+    desc: 'Lock $18 in the mattress. You keep it even if you eat dirt.',
+    cost: 12,
+  },
+  {
+    id: 'greed',
+    name: 'Greed Coin Flip',
+    desc: 'Risk $20. Win the next bout: +$45. Lose: that $20 is scrap.',
+    cost: 20,
+  },
+  {
+    id: 'insurance',
+    name: 'Dignity Insurance',
+    desc: 'Next time you drop a bout, get $30 back. One claim.',
+    cost: 22,
+  },
+];
+
+export interface ShopBetState {
+  /** Credits locked that survive a loss */
+  safeStash: number;
+  /** Active greed wager (paid, awaiting bout result) */
+  greedActive: boolean;
+  /** Insurance claims remaining */
+  insurance: number;
+}
+
+export const EMPTY_BETS: ShopBetState = {
+  safeStash: 0,
+  greedActive: false,
+  insurance: 0,
+};
+
+export function canBuyBet(
+  bets: ShopBetState,
+  id: ShopBetId,
+  credits: number,
+): boolean {
+  const def = SHOP_BETS.find((b) => b.id === id)!;
+  if (credits < def.cost) return false;
+  if (id === 'greed' && bets.greedActive) return false;
+  if (id === 'insurance' && bets.insurance > 0) return false;
+  if (id === 'safe' && bets.safeStash >= 54) return false;
+  return true;
+}
+
+export function buyBet(
+  bets: ShopBetState,
+  id: ShopBetId,
+  credits: number,
+): { bets: ShopBetState; credits: number; ok: boolean; flash: string } {
+  if (!canBuyBet(bets, id, credits)) {
+    return { bets, credits, ok: false, flash: '' };
+  }
+  const def = SHOP_BETS.find((b) => b.id === id)!;
+  const next = { ...bets };
+  let flash = '';
+  if (id === 'safe') {
+    next.safeStash += 18;
+    flash = 'STASHED $18';
+  } else if (id === 'greed') {
+    next.greedActive = true;
+    flash = 'GREED LIVE';
+  } else {
+    next.insurance += 1;
+    flash = 'INSURED';
+  }
+  return { bets: next, credits: credits - def.cost, ok: true, flash };
+}
+
+/** Resolve bets after a bout. winnerSide is human side for vsai, or the side that owns these bets. */
+export function resolveBetsOnBout(
+  bets: ShopBetState,
+  credits: number,
+  won: boolean,
+): { bets: ShopBetState; credits: number; flashes: string[] } {
+  const next = { ...bets };
+  let cash = credits;
+  const flashes: string[] = [];
+  if (next.greedActive) {
+    next.greedActive = false;
+    if (won) {
+      cash += 45;
+      flashes.push('GREED PAYS +$45');
+    } else {
+      flashes.push('GREED ATE YOUR $20');
+    }
+  }
+  if (!won && next.insurance > 0) {
+    next.insurance -= 1;
+    cash += 30;
+    flashes.push('INSURANCE +$30');
+  }
+  if (!won && next.safeStash > 0) {
+    const payout = next.safeStash;
+    next.safeStash = 0;
+    cash += payout;
+    flashes.push(`STASH SAVED +$${payout}`);
+  } else if (won && next.safeStash > 0) {
+    // Keep stash for later losses - or cash out half on win for story
+    const bonus = Math.round(next.safeStash * 0.25);
+    if (bonus > 0) {
+      cash += bonus;
+      flashes.push(`STASH DIVIDEND +$${bonus}`);
+    }
+  }
+  return { bets: next, credits: cash, flashes };
+}

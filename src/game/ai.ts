@@ -1,45 +1,91 @@
 import { angDiff, wrapDelta } from './math';
 import {
-  PLANET_X,
-  PLANET_Y,
   type PlayerInput,
   type ShipRuntime,
   type SimState,
+  isHostile,
 } from './types';
 import { EMPTY_INPUT } from './types';
+import { getPlanetX, getPlanetY } from './arena';
+
+export type AiStyle = 'standard' | 'teach' | 'aggressive' | 'ranked';
+
+export type AiOpts = {
+  /** 0 = soft teaching bot, 1 = normal, 1.35 = ranked tryhard */
+  skill?: number;
+  style?: AiStyle;
+  /** Player mistakes observed this fight - teach mode eases pressure */
+  playerPressure?: number;
+};
+
+function nearestFoe(
+  state: SimState,
+  me: ShipRuntime,
+  preferred?: ShipRuntime | null,
+): ShipRuntime | null {
+  if (preferred && isHostile(me, preferred)) return preferred;
+  let best: ShipRuntime | null = null;
+  let bestD = Infinity;
+  for (const s of state.ships) {
+    if (!isHostile(me, s)) continue;
+    const d = wrapDelta(me.x, me.y, s.x, s.y).dist;
+    if (d < bestD) {
+      bestD = d;
+      best = s;
+    }
+  }
+  return best;
+}
 
 /**
  * Intentionally imperfect AI - aim is loose, fires late, hesitates.
+ * Skill / style knobs support tutorial teaching and ranked climb.
+ * `foe` is optional; when omitted (or dead), picks nearest hostile.
  */
-export function thinkAI(state: SimState, me: ShipRuntime, foe: ShipRuntime): PlayerInput {
+export function thinkAI(
+  state: SimState,
+  me: ShipRuntime,
+  foe?: ShipRuntime | null,
+  opts: AiOpts = {},
+): PlayerInput {
   if (!me.alive) return { ...EMPTY_INPUT };
   const input: PlayerInput = { ...EMPTY_INPUT };
-  if (!foe.alive) {
+  const target = nearestFoe(state, me, foe ?? null);
+  if (!target) {
     input.thrust = true;
     return input;
   }
 
-  // Stutter: skip decisions some frames so humans can outplay
-  if (state.tick % 3 === 0) {
+  const style = opts.style ?? 'standard';
+  let skill = opts.skill ?? (style === 'teach' ? 0.55 : style === 'ranked' ? 1.2 : 1);
+  if (style === 'teach') {
+    const pressure = opts.playerPressure ?? 0;
+    skill = Math.max(0.35, skill - pressure * 0.12);
+  }
+  if (style === 'aggressive') skill = Math.min(1.4, skill + 0.15);
+
+  const stutterEvery = skill < 0.7 ? 4 : skill > 1.1 ? 2 : 3;
+  if (state.tick % stutterEvery === 0) {
     // hold previous-ish by doing less this tick
   }
 
-  const { dx, dy, dist } = wrapDelta(me.x, me.y, foe.x, foe.y);
+  const { dx, dy, dist } = wrapDelta(me.x, me.y, target.x, target.y);
   const absFace = Math.abs(angDiff(me.angle, Math.atan2(dy, dx)));
 
-  // Loose lead + aim jitter
-  const lead = dist / 520;
+  const lead = (dist / 520) * (0.7 + skill * 0.45);
+  const jitterAmp = Math.max(8, 48 - skill * 28);
   const jitter = ((state.tick * 17 + me.player * 91) % 11) / 11 - 0.5;
-  const predX = foe.x + foe.vx * lead + jitter * 40;
-  const predY = foe.y + foe.vy * lead + jitter * 40;
+  const predX = target.x + target.vx * lead + jitter * jitterAmp;
+  const predY = target.y + target.vy * lead + jitter * jitterAmp;
   const { dx: pdx, dy: pdy } = wrapDelta(me.x, me.y, predX, predY);
   const aimDiff = angDiff(me.angle, Math.atan2(pdy, pdx));
 
-  // Slower, less precise turning
-  if (aimDiff > 0.22) input.right = true;
-  else if (aimDiff < -0.22) input.left = true;
+  const turnDead = Math.max(0.1, 0.28 - skill * 0.1);
+  if (aimDiff > turnDead) input.right = true;
+  else if (aimDiff < -turnDead) input.left = true;
 
   const myHpRatio = me.hp / me.maxHp;
+  const foeHpRatio = target.hp / Math.max(1, target.maxHp);
   const ideal =
     me.shipId === 'shade' || me.shipId === 'cinder'
       ? 110
@@ -47,116 +93,96 @@ export function thinkAI(state: SimState, me: ShipRuntime, foe: ShipRuntime): Pla
         ? 240
         : 180;
 
-  const closing = me.vx * (dx / (dist || 1)) + me.vy * (dy / (dist || 1));
+  let rangeBias = 0;
+  if (style === 'teach') {
+    if (foeHpRatio < 0.35) rangeBias = 70;
+    else if (foeHpRatio > 0.75) rangeBias = -35;
+  }
 
-  if (myHpRatio < 0.35 && dist < 220) {
-    const flee = Math.atan2(-dy, -dx);
-    const fleeDiff = angDiff(me.angle, flee);
-    input.left = false;
-    input.right = false;
-    if (fleeDiff > 0.15) input.right = true;
-    else if (fleeDiff < -0.15) input.left = true;
-    input.thrust = Math.abs(fleeDiff) < 0.85;
-    if (me.shipId === 'scuttle' || me.shipId === 'zephyr' || me.shipId === 'mirage') {
-      input.special = true;
+  const wantDist = ideal + rangeBias;
+  if (dist > wantDist + 40) input.thrust = absFace < 0.9;
+  else if (dist < wantDist - 50) {
+    if (state.tick % 7 < 4) {
+      input.left = !input.right;
+      input.right = !input.left;
     }
-  } else if (dist > ideal + 50) {
-    input.thrust = absFace < 0.85 && state.tick % 5 !== 0;
-  } else if (dist < ideal - 60) {
-    input.thrust = absFace < 0.55 && closing < 60;
+    input.thrust = absFace > 1.2 || myHpRatio < 0.4;
   } else {
-    input.thrust = absFace < 0.45 && state.tick % 50 < 22;
+    input.thrust = absFace < 0.55 && state.tick % 5 !== 0;
   }
 
-  // Fire only when fairly lined up, and not every frame
-  if (absFace < 0.55 && dist < 380 && state.tick % 4 < 2) {
-    input.fire = true;
-  }
-  if (me.shipId === 'nullpoint' && dist < 180 && absFace < 0.65) {
-    input.fire = true;
-  }
+  const fireGate = skill < 0.7 ? 0.55 : skill > 1.1 ? 0.28 : 0.4;
+  input.fire = absFace < fireGate && dist < 420 + skill * 80;
 
-  // Specials used less aggressively
   switch (me.shipId) {
     case 'solhammer':
-      input.special = dist < 300 && absFace < 0.35 && me.energy > 70 && state.tick % 20 === 0;
+      input.special = dist < 260 && absFace < 0.35 && me.energy > 40;
       break;
     case 'zephyr':
-      input.special = myHpRatio < 0.35 && dist < 140;
+      input.special = (dist > 280 || myHpRatio < 0.35) && me.energy > 25;
       break;
     case 'bulwark':
-      input.special =
-        state.projectiles.some(
-          (p) => p.owner !== me.player && wrapDelta(p.x, p.y, me.x, me.y).dist < 70,
-        ) && me.energy > 40;
+      input.special = (myHpRatio < 0.55 || dist < 120) && me.energy > 30;
       break;
     case 'shade':
-      input.special = dist > 120;
-      if (dist < 90 && absFace < 0.35) input.special = false;
+      input.special = dist < 200 || myHpRatio < 0.45;
       break;
     case 'prism':
-      input.special = dist < 120 && me.energy > 60;
+      input.special = dist < 180 && me.energy > 35;
       break;
     case 'brood':
-      input.special =
-        dist < 260 &&
-        me.specialCd <= 0 &&
-        state.drones.filter((d) => d.owner === me.player).length < 1;
+    case 'swarmlord':
+      input.special = dist < 240 && me.energy > 30;
       break;
     case 'cinder':
-      input.special = absFace < 0.4 && dist > 80 && dist < 240 && state.tick % 3 === 0;
+      input.special = dist < 160 && absFace < 0.5;
       break;
     case 'grappler':
-      input.special = dist < 240 && dist > 80 && state.tick % 2 === 0;
+      input.special = dist < 280 && dist > 60;
       break;
     case 'scuttle':
-      input.special = myHpRatio < 0.4 && dist < 160;
+      input.special = dist < 140 || myHpRatio < 0.3;
       break;
     case 'nullpoint':
-      input.special = myHpRatio < 0.28;
+      input.special = myHpRatio < 0.4 && me.energy > 40;
       break;
     case 'stormlance':
-      input.special = dist < 280 && absFace < 0.4 && me.energy > 50;
+      input.special = dist < 300 && absFace < 0.4 && me.energy > 35;
       break;
     case 'mirage':
-      input.special = myHpRatio < 0.45 && dist < 180;
+      input.special = dist < 150 || myHpRatio < 0.35;
       break;
     case 'harrier':
-      input.special = dist > 100 && dist < 260 && absFace < 0.35 && me.energy > 40;
+      input.special = dist < 200 && absFace < 0.45;
       break;
     case 'minewright':
-      input.special = dist < 160 && me.specialCd <= 0 && me.energy > 50;
+      input.special = dist < 220 && me.energy > 30;
       break;
     case 'razorwing':
-      input.special = dist < 130 && absFace < 0.45 && me.energy > 45;
+      input.special = dist < 200 && absFace < 0.5;
       break;
     case 'glacier':
-      input.special = dist < 170 && me.energy > 55;
-      break;
-    case 'swarmlord':
-      input.special =
-        dist < 280 &&
-        me.specialCd <= 0 &&
-        state.drones.filter((d) => d.owner === me.player).length < 2;
+      input.special = dist < 180 && me.energy > 35;
       break;
     case 'pulsejet':
-      input.special = dist < 140 && absFace < 0.6;
+      input.special = dist < 160 && me.energy > 30;
       break;
     case 'railfox':
-      input.special = dist > 160 && dist < 360 && absFace < 0.2 && me.energy > 60;
+      input.special = dist > 180 && dist < 420 && absFace < 0.2 && me.energy > 40;
       break;
     case 'sanguine':
       input.special = dist < 140 && myHpRatio < 0.7 && me.energy > 45;
       break;
   }
 
-  // Avoid planet - use match planet radius
-  const pdx2 = me.x - PLANET_X;
-  const pdy2 = me.y - PLANET_Y;
+  const pdx2 = me.x - getPlanetX();
+  const pdy2 = me.y - getPlanetY();
   const pd = Math.hypot(pdx2, pdy2);
   const danger = state.planetR + 90 + state.gravityTier * 30;
-  if (pd < danger || (pd < danger + 80 && 
-      (-pdx2 / pd) * me.vx + (-pdy2 / pd) * me.vy > 30)) {
+  if (
+    pd < danger ||
+    (pd < danger + 80 && (-pdx2 / pd) * me.vx + (-pdy2 / pd) * me.vy > 30)
+  ) {
     const away = Math.atan2(pdy2, pdx2);
     const ad = angDiff(me.angle, away);
     input.left = ad < -0.04;

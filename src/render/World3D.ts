@@ -4,15 +4,24 @@ import {
   ARENA_H,
   ARENA_W,
   PLANET_R,
-  PLANET_X,
-  PLANET_Y,
   VIEW_H,
   VIEW_W,
+  isHostile,
   type SimState,
 } from '../game/types';
-import { clamp, lerp, nearestImage, nearestImageSticky, wrapMid } from '../game/math';
+import { getPlanetX, getPlanetY } from '../game/arena';
+import { clamp, lerp, nearestImage, nearestImageSticky } from '../game/math';
 import { buildDroneMesh, buildShipMesh } from './shipMeshes';
 import type { DrawOpts } from '../game/renderer';
+import { PostPipeline } from './post/PostPipeline';
+import { RibbonTrails } from './fx/RibbonTrails';
+import { CombatLights } from './fx/CombatLights';
+import { SignatureFx } from './fx/SignatureFx';
+import { WorldHud } from './fx/WorldHud';
+import {
+  DEFAULT_GRAPHICS,
+  type GraphicsConfig,
+} from '../game/graphicsConfig';
 
 type ProjObj = {
   mesh: THREE.Object3D;
@@ -52,14 +61,16 @@ export class World3D {
   readonly renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
-  private ships: [THREE.Group, THREE.Group] | null = null;
-  private shipIds: [string, string] = ['', ''];
-  private exhaust: [THREE.Object3D | null, THREE.Object3D | null] = [null, null];
+  private ships: THREE.Group[] | null = null;
+  private shipIds: string[] = [];
+  private exhaust: (THREE.Object3D | null)[] = [];
   private projectiles = new Map<number, ProjObj>();
   private drones = new Map<number, DroneObj>();
   private effects = new Map<number, FxObj>();
   private asteroids = new Map<number, { mesh: THREE.Group; id: number; kind: string }>();
-  private shieldMeshes: [THREE.Mesh, THREE.Mesh];
+  private scrapMeshes = new Map<number, THREE.Group>();
+  private telegraphMeshes: THREE.Mesh[] = [];
+  private shieldMeshes: THREE.Mesh[] = [];
   private tractorLine: THREE.Line;
   private coneMesh: THREE.Mesh;
   private clock = 0;
@@ -82,26 +93,42 @@ export class World3D {
   private shakeX = 0;
   private shakeY = 0;
   private shakeZ = 0;
-  private killFocus = { x: PLANET_X, y: PLANET_Y, blend: 0 };
+  private killFocus = { x: getPlanetX(), y: getPlanetY(), blend: 0 };
   private speedLines: THREE.LineSegments | null = null;
+  /** Cosmetic trail tint for local thrusters */
+  private trailColor = new THREE.Color('#8ab4d8');
+  private cloakFog = false;
+  private baseFogDensity = 0.00022;
+  private post: PostPipeline | null = null;
+  private ribbons: RibbonTrails | null = null;
+  private combatLights: CombatLights | null = null;
+  private signatureFx: SignatureFx | null = null;
+  private worldHud: WorldHud | null = null;
+  private gfx: GraphicsConfig = { ...DEFAULT_GRAPHICS };
+  private prevAlive: boolean[] = [];
+  private prevHitRead: number[] = [];
+  private lavaVeins: THREE.Mesh | null = null;
+  private scrapDebris: THREE.Points | null = null;
+  private mapMoodId = 'standard';
+  private killCamOrbit = 0;
+  private baseExposure = 1.15;
   /**
    * Continuous chase look-at (may leave [0, ARENA]).
    * Never wrapPos this - wrapping here is what caused the edge-exit shock.
    */
-  private camLook = { x: PLANET_X, y: PLANET_Y };
+  private camLook = { x: getPlanetX(), y: getPlanetY() };
   /** Planet drawn at this torus image (nearest to camLook, sticky) */
-  private planetView = { x: PLANET_X, y: PLANET_Y };
+  private planetView = { x: getPlanetX(), y: getPlanetY() };
   /** Per-ship sticky draw positions - prevents wrap seam teleports */
-  private shipDraw: [{ x: number; y: number }, { x: number; y: number }] = [
-    { x: PLANET_X, y: PLANET_Y },
-    { x: PLANET_X, y: PLANET_Y },
-  ];
+  private shipDraw: { x: number; y: number }[] = [];
   private shipDrawInit = false;
   /** Sticky draw cache for projectiles / drones / asteroids / fx */
   private drawCache = new Map<number, { x: number; y: number }>();
   /** 0 = ships close (zoomed in), 1 = ships far (zoomed out) */
   private camSep = 0.55;
   private _proj = new THREE.Vector3();
+  /** Scale-up factor for projectiles during kill cam */
+  private killBoost = 1;
 
   /** Add camera punch - hits and kills */
   addShake(amount: number): void {
@@ -162,8 +189,8 @@ export class World3D {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.camera = new THREE.PerspectiveCamera(36, VIEW_W / VIEW_H, 1, 8000);
-    this.camera.position.set(PLANET_X, 560, PLANET_Y + 480);
-    this.camera.lookAt(PLANET_X, 0, PLANET_Y);
+    this.camera.position.set(getPlanetX(), 560, getPlanetY() + 480);
+    this.camera.lookAt(getPlanetX(), 0, getPlanetY());
 
     this.scene.background = new THREE.Color('#0a1528');
     this.scene.fog = new THREE.FogExp2('#102038', 0.00022);
@@ -184,7 +211,7 @@ export class World3D {
     rim.position.set(-300, 200, -400);
     this.scene.add(rim);
     this.planetLight = new THREE.PointLight(0x4aa3ff, 2.2, 1400, 1.5);
-    this.planetLight.position.set(PLANET_X, 40, PLANET_Y);
+    this.planetLight.position.set(getPlanetX(), 40, getPlanetY());
     this.scene.add(this.planetLight);
 
     this.makeCosmos();
@@ -197,7 +224,7 @@ export class World3D {
     this.planetAtmo = planet.atmo;
     this.planetRing = planet.ring;
     this.volcanoes = planet.volcanoes;
-    this.planetGroup.position.set(PLANET_X, 0, PLANET_Y);
+    this.planetGroup.position.set(getPlanetX(), 0, getPlanetY());
     this.scene.add(this.planetGroup);
     this.initFireworks();
 
@@ -212,11 +239,10 @@ export class World3D {
       }),
     );
     this.softPad.rotation.x = -Math.PI / 2;
-    this.softPad.position.set(PLANET_X, -2, PLANET_Y);
+    this.softPad.position.set(getPlanetX(), -2, getPlanetY());
     this.scene.add(this.softPad);
 
-    this.shieldMeshes = [this.makeShield(), this.makeShield()];
-    this.scene.add(this.shieldMeshes[0], this.shieldMeshes[1]);
+    this.ensureFxSlots(2);
 
     const lineGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(),
@@ -242,6 +268,22 @@ export class World3D {
     this.coneMesh.rotation.x = -Math.PI / 2;
     this.coneMesh.visible = false;
     this.scene.add(this.coneMesh);
+
+    this.post = new PostPipeline(this.renderer, this.scene, this.camera, VIEW_W, VIEW_H);
+    this.ribbons = new RibbonTrails(this.scene);
+    this.combatLights = new CombatLights(this.scene);
+    this.signatureFx = new SignatureFx(this.scene);
+    this.worldHud = new WorldHud(this.scene);
+  }
+
+  setGraphicsConfig(cfg: GraphicsConfig): void {
+    this.gfx = { ...cfg };
+    this.post?.setEnabled({
+      bloom: cfg.postFx && cfg.bloom,
+      chromatic: cfg.postFx && cfg.chromatic,
+      grain: cfg.postFx && cfg.grain,
+      punch: cfg.postFx && cfg.postPunch,
+    });
   }
 
   private makeCosmos(): void {
@@ -254,9 +296,9 @@ export class World3D {
     for (const L of layers) {
       const pos = new Float32Array(L.n * 3);
       for (let i = 0; i < L.n; i++) {
-        pos[i * 3] = PLANET_X + (Math.random() - 0.5) * L.span;
+        pos[i * 3] = getPlanetX() + (Math.random() - 0.5) * L.span;
         pos[i * 3 + 1] = (Math.random() - 0.5) * L.ySpread;
-        pos[i * 3 + 2] = PLANET_Y + (Math.random() - 0.5) * L.span;
+        pos[i * 3 + 2] = getPlanetY() + (Math.random() - 0.5) * L.span;
       }
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -281,9 +323,9 @@ export class World3D {
     for (let n = 0; n < 4; n++) {
       const count = 220;
       const pos = new Float32Array(count * 3);
-      const cx = PLANET_X + (Math.random() - 0.5) * 1800;
+      const cx = getPlanetX() + (Math.random() - 0.5) * 1800;
       const cy = -80 + Math.random() * 200;
-      const cz = PLANET_Y + (Math.random() - 0.5) * 1800;
+      const cz = getPlanetY() + (Math.random() - 0.5) * 1800;
       for (let i = 0; i < count; i++) {
         pos[i * 3] = cx + (Math.random() - 0.5) * 520;
         pos[i * 3 + 1] = cy + (Math.random() - 0.5) * 180;
@@ -324,7 +366,7 @@ export class World3D {
       m.opacity = 0.35;
     }
     g.add(grid);
-    g.position.set(PLANET_X, 0, PLANET_Y);
+    g.position.set(getPlanetX(), 0, getPlanetY());
     return g;
   }
 
@@ -424,9 +466,9 @@ export class World3D {
       new THREE.MeshStandardMaterial({
         color: '#1a5a8c',
         emissive: '#0a2a44',
-        emissiveIntensity: 0.35,
-        metalness: 0.1,
-        roughness: 0.75,
+        emissiveIntensity: 0.45,
+        metalness: 0.18,
+        roughness: 0.72,
       }),
     );
     body.castShadow = true;
@@ -434,11 +476,32 @@ export class World3D {
     body.scale.setScalar(PLANET_R);
     spin.add(body);
 
+    // Lava vein shell - subtle glowing cracks
+    const veins = new THREE.Mesh(
+      new THREE.SphereGeometry(1.01, 48, 48),
+      new THREE.MeshStandardMaterial({
+        color: '#000000',
+        emissive: '#ff4a18',
+        emissiveIntensity: 0.85,
+        transparent: true,
+        opacity: 0.35,
+        roughness: 1,
+        metalness: 0,
+        depthWrite: false,
+      }),
+    );
+    veins.scale.setScalar(PLANET_R);
+    veins.name = 'lavaVeins';
+    spin.add(veins);
+    this.lavaVeins = veins;
+
     const volcanoes: Volcano[] = [];
     // Sparse vents - locals keep it quiet most of the time
     const vents = [
       [0.7, 2.1],
       [1.1, 4.8],
+      [0.4, 5.6],
+      [1.4, 1.2],
     ];
     for (const [lat, lon] of vents) {
       const v = this.makeVolcano(lat, lon);
@@ -447,24 +510,38 @@ export class World3D {
     }
 
     const atmo = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 32, 32),
+      new THREE.SphereGeometry(1, 48, 48),
       new THREE.MeshBasicMaterial({
         color: '#4aa3ff',
         transparent: true,
-        opacity: 0.18,
+        opacity: 0.22,
         side: THREE.BackSide,
         depthWrite: false,
       }),
     );
-    atmo.scale.setScalar(PLANET_R * 1.12);
+    atmo.scale.setScalar(PLANET_R * 1.18);
     g.add(atmo);
 
+    // Soft outer haze shell
+    const haze = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 32, 32),
+      new THREE.MeshBasicMaterial({
+        color: '#7ec8ff',
+        transparent: true,
+        opacity: 0.08,
+        side: THREE.BackSide,
+        depthWrite: false,
+      }),
+    );
+    haze.scale.setScalar(PLANET_R * 1.42);
+    g.add(haze);
+
     const ring = new THREE.Mesh(
-      new THREE.RingGeometry(1.35, 1.7, 64),
+      new THREE.RingGeometry(1.35, 1.85, 72),
       new THREE.MeshBasicMaterial({
         color: '#6ec8ff',
         transparent: true,
-        opacity: 0.12,
+        opacity: 0.16,
         side: THREE.DoubleSide,
         depthWrite: false,
       }),
@@ -472,6 +549,33 @@ export class World3D {
     ring.rotation.x = -Math.PI / 2.4;
     ring.scale.setScalar(PLANET_R);
     g.add(ring);
+
+    // Scrap debris belt
+    const nDebris = 140;
+    const dPos = new Float32Array(nDebris * 3);
+    for (let i = 0; i < nDebris; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = PLANET_R * (1.45 + Math.random() * 0.55);
+      dPos[i * 3] = Math.cos(a) * r;
+      dPos[i * 3 + 1] = (Math.random() - 0.5) * PLANET_R * 0.25;
+      dPos[i * 3 + 2] = Math.sin(a) * r;
+    }
+    const dGeo = new THREE.BufferGeometry();
+    dGeo.setAttribute('position', new THREE.BufferAttribute(dPos, 3));
+    const scrapDebris = new THREE.Points(
+      dGeo,
+      new THREE.PointsMaterial({
+        color: 0xc4a574,
+        size: 2.8,
+        transparent: true,
+        opacity: 0.75,
+        depthWrite: false,
+        sizeAttenuation: true,
+      }),
+    );
+    g.add(scrapDebris);
+    this.scrapDebris = scrapDebris;
+
     return { group: g, spin, body, atmo, ring, volcanoes };
   }
 
@@ -544,6 +648,7 @@ export class World3D {
 
   /** Launch fireworks from the planet surface - locals celebrating. */
   private spawnFirework(planetR: number): void {
+    if (!this.gfx.fireworks) return;
     const fw = this.fireworks.find((f) => !f.active);
     if (!fw) return;
     const colors = [0xff6b6b, 0xffe066, 0x69db7c, 0x74c0fc, 0xe599f7, 0xff922b, 0xffffff, 0xffa8a8];
@@ -714,8 +819,8 @@ export class World3D {
 
   private updateCosmos(dt: number): void {
     // Parallax: distant stars lag behind the chase camera so travel feels huge
-    const px = (this.camLook.x - PLANET_X) * 0.04;
-    const pz = (this.camLook.y - PLANET_Y) * 0.04;
+    const px = (this.camLook.x - getPlanetX()) * 0.04;
+    const pz = (this.camLook.y - getPlanetY()) * 0.04;
     for (let li = 0; li < this.starLayers.length; li++) {
       const layer = this.starLayers[li]!;
       const drift = (layer.userData.drift as number) ?? 20;
@@ -846,18 +951,162 @@ export class World3D {
     return m;
   }
 
-  ensureShips(state: SimState): void {
-    const ids: [string, string] = [state.ships[0].shipId, state.ships[1].shipId];
-    if (this.ships && this.shipIds[0] === ids[0] && this.shipIds[1] === ids[1]) return;
-    if (this.ships) {
-      this.scene.remove(this.ships[0], this.ships[1]);
+  private makeTelegraph(): THREE.Mesh {
+    const g = new THREE.Group() as unknown as THREE.Mesh;
+    // Outer anime ring
+    const outer = new THREE.Mesh(
+      new THREE.RingGeometry(0.82, 1.12, 48),
+      new THREE.MeshBasicMaterial({
+        color: 0xff6b2d,
+        transparent: true,
+        opacity: 0.75,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    outer.rotation.x = -Math.PI / 2;
+    // Inner glyph ticks
+    const ticks = new THREE.Group();
+    for (let i = 0; i < 8; i++) {
+      const tick = new THREE.Mesh(
+        new THREE.BoxGeometry(0.08, 0.02, 0.22),
+        new THREE.MeshBasicMaterial({
+          color: 0xffe566,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const a = (i / 8) * Math.PI * 2;
+      tick.position.set(Math.cos(a) * 0.95, 0.02, Math.sin(a) * 0.95);
+      tick.rotation.y = -a;
+      ticks.add(tick);
     }
-    const a = buildShipMesh(state.ships[0].shipId);
-    const b = buildShipMesh(state.ships[1].shipId);
-    this.ships = [a, b];
+    ticks.rotation.x = -Math.PI / 2;
+    // Use a single mesh wrapper for existing scale/position API
+    const m = new THREE.Mesh(
+      new THREE.RingGeometry(0.85, 1.15, 48),
+      new THREE.MeshBasicMaterial({
+        color: 0xff6b2d,
+        transparent: true,
+        opacity: 0.55,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    m.rotation.x = -Math.PI / 2;
+    m.add(outer);
+    m.add(ticks);
+    m.visible = false;
+    void g;
+    return m;
+  }
+
+  private syncScrapZones(state: SimState): void {
+    const seen = new Set<number>();
+    for (const z of state.scrapZones ?? []) {
+      seen.add(z.id);
+      let g = this.scrapMeshes.get(z.id);
+      if (!g) {
+        g = new THREE.Group();
+        if (z.kind === 'pile') {
+          const mat = new THREE.MeshStandardMaterial({
+            color: 0x8a6a45,
+            roughness: 0.95,
+            metalness: 0.15,
+          });
+          for (let i = 0; i < 5; i++) {
+            const rock = new THREE.Mesh(
+              new THREE.DodecahedronGeometry(8 + Math.random() * 10, 0),
+              mat.clone(),
+            );
+            rock.position.set(
+              (Math.random() - 0.5) * z.radius * 0.7,
+              4 + Math.random() * 8,
+              (Math.random() - 0.5) * z.radius * 0.7,
+            );
+            rock.rotation.set(Math.random(), Math.random(), Math.random());
+            g.add(rock);
+          }
+          const pad = new THREE.Mesh(
+            new THREE.CircleGeometry(z.radius, 24),
+            new THREE.MeshBasicMaterial({
+              color: 0xc4a574,
+              transparent: true,
+              opacity: 0.14,
+              depthWrite: false,
+            }),
+          );
+          pad.rotation.x = -Math.PI / 2;
+          pad.position.y = 0.5;
+          g.add(pad);
+        } else {
+          const lane = new THREE.Mesh(
+            new THREE.PlaneGeometry(z.length, z.radius * 2),
+            new THREE.MeshBasicMaterial({
+              color: 0x5b8def,
+              transparent: true,
+              opacity: 0.12,
+              depthWrite: false,
+              side: THREE.DoubleSide,
+            }),
+          );
+          lane.rotation.x = -Math.PI / 2;
+          lane.rotation.z = -z.angle;
+          lane.position.y = 1;
+          g.add(lane);
+        }
+        this.scene.add(g);
+        this.scrapMeshes.set(z.id, g);
+      }
+      const vp = this.viewPos(z.x, z.y, this.planetView);
+      g.position.set(vp.x, 0, vp.y);
+    }
+    for (const [id, g] of this.scrapMeshes) {
+      if (!seen.has(id)) {
+        this.scene.remove(g);
+        this.scrapMeshes.delete(id);
+      }
+    }
+  }
+
+  private ensureFxSlots(n: number): void {
+    while (this.shieldMeshes.length < n) {
+      const m = this.makeShield();
+      this.shieldMeshes.push(m);
+      this.scene.add(m);
+    }
+    while (this.telegraphMeshes.length < n) {
+      const m = this.makeTelegraph();
+      this.telegraphMeshes.push(m);
+      this.scene.add(m);
+    }
+  }
+
+  ensureShips(state: SimState): void {
+    const n = state.ships.length;
+    const ids = state.ships.map((s) => s.shipId);
+    const sameCount = this.ships?.length === n;
+    const sameIds = sameCount && ids.every((id, i) => this.shipIds[i] === id);
+    if (this.ships && sameIds) return;
+    if (this.ships) {
+      for (const mesh of this.ships) {
+        this.scene.remove(mesh);
+      }
+    }
+    const meshes = state.ships.map((s) => buildShipMesh(s.shipId));
+    this.ships = meshes;
     this.shipIds = ids;
-    this.exhaust = [a.getObjectByName('exhaust') ?? null, b.getObjectByName('exhaust') ?? null];
-    this.scene.add(a, b);
+    this.exhaust = meshes.map((m) => m.getObjectByName('exhaust') ?? null);
+    for (const mesh of meshes) {
+      this.scene.add(mesh);
+    }
+    this.ribbons?.ensureSlots(n);
+    this.worldHud?.ensureSlots(n);
+    this.ensureFxSlots(n);
     this.resetTracking(state);
   }
 
@@ -869,21 +1118,144 @@ export class World3D {
     this.shakeX = 0;
     this.shakeY = 0;
     this.shakeZ = 0;
-    if (state) {
-      const a = state.ships[0];
-      const b = state.ships[1];
-      const mid = wrapMid(a.x, a.y, b.x, b.y);
-      this.camLook.x = mid.x;
-      this.camLook.y = mid.y;
-      this.shipDraw[0] = nearestImage(this.camLook.x, this.camLook.y, a.x, a.y);
-      this.shipDraw[1] = nearestImage(this.camLook.x, this.camLook.y, b.x, b.y);
+    const n = state?.ships.length ?? 0;
+    this.prevAlive = Array(n).fill(true);
+    this.prevHitRead = Array(n).fill(0);
+    this.killCamOrbit = 0;
+    if (state && n > 0) {
+      let cx = 0;
+      let cy = 0;
+      for (const s of state.ships) {
+        cx += s.x;
+        cy += s.y;
+      }
+      this.camLook.x = cx / n;
+      this.camLook.y = cy / n;
+      this.shipDraw = state.ships.map((s) =>
+        nearestImage(this.camLook.x, this.camLook.y, s.x, s.y),
+      );
       this.shipDrawInit = true;
-      this.planetView = nearestImage(this.camLook.x, this.camLook.y, PLANET_X, PLANET_Y);
+      this.planetView = nearestImage(
+        this.camLook.x,
+        this.camLook.y,
+        getPlanetX(),
+        getPlanetY(),
+      );
     } else {
-      this.camLook.x = PLANET_X;
-      this.camLook.y = PLANET_Y;
-      this.planetView.x = PLANET_X;
-      this.planetView.y = PLANET_Y;
+      this.camLook.x = getPlanetX();
+      this.camLook.y = getPlanetY();
+      this.planetView.x = getPlanetX();
+      this.planetView.y = getPlanetY();
+      this.shipDraw = [];
+    }
+  }
+
+  /** Map rules + cosmetic trail for the current bout. */
+  setArenaMood(
+    map: SimState['map'] | null | undefined,
+    trailHex?: string,
+  ): void {
+    this.cloakFog = !!map?.cloakFog;
+    this.mapMoodId = map?.id ?? 'standard';
+    if (trailHex) {
+      this.trailColor.set(trailHex);
+      this.ribbons?.setColor(0, trailHex);
+      this.ribbons?.setColor(1, trailHex);
+      const slotN = this.ships?.length ?? 0;
+      for (let i = 2; i < slotN; i++) {
+        this.ribbons?.setColor(i, trailHex);
+      }
+    }
+    const fog = this.scene.fog as THREE.FogExp2 | null;
+    const id = map?.id ?? 'standard';
+
+    if (id === 'cloak_fog' || this.cloakFog) {
+      this.scene.background = new THREE.Color('#050c18');
+      if (fog) {
+        fog.color.set('#071018');
+        fog.density = this.baseFogDensity * 4.2;
+      }
+      this.post?.setMood({
+        bloomStrength: 0.72,
+        bloomRadius: 0.5,
+        chromatic: 0.0016,
+        vignette: 0.42,
+        grain: 0.28,
+      });
+      this.renderer.toneMappingExposure = 0.95;
+      this.baseExposure = 0.95;
+    } else if (id === 'asteroid_storm') {
+      this.scene.background = new THREE.Color('#140c08');
+      if (fog) {
+        fog.color.set('#2a1810');
+        fog.density = this.baseFogDensity * 1.6;
+      }
+      this.post?.setMood({
+        bloomStrength: 0.48,
+        bloomRadius: 0.35,
+        chromatic: 0.001,
+        vignette: 0.25,
+        grain: 0.22,
+      });
+      this.renderer.toneMappingExposure = 1.2;
+      this.baseExposure = 1.2;
+    } else if (id === 'scrap_maze') {
+      this.scene.background = new THREE.Color('#0c1018');
+      if (fog) {
+        fog.color.set('#1a2030');
+        fog.density = this.baseFogDensity * 1.3;
+      }
+      this.post?.setMood({
+        bloomStrength: 0.58,
+        bloomRadius: 0.4,
+        chromatic: 0.0012,
+        vignette: 0.28,
+        grain: 0.2,
+      });
+      this.renderer.toneMappingExposure = 1.1;
+      this.baseExposure = 1.1;
+    } else if (id === 'low_grav') {
+      this.scene.background = new THREE.Color('#081428');
+      if (fog) {
+        fog.color.set('#102848');
+        fog.density = this.baseFogDensity * 0.7;
+      }
+      this.post?.setMood({
+        bloomStrength: 0.7,
+        bloomRadius: 0.55,
+        chromatic: 0.0009,
+        vignette: 0.16,
+        grain: 0.12,
+      });
+      this.renderer.toneMappingExposure = 1.25;
+      this.baseExposure = 1.25;
+    } else {
+      this.scene.background = new THREE.Color('#0a1528');
+      if (fog) {
+        fog.color.set('#102038');
+        fog.density = this.baseFogDensity;
+      }
+      this.post?.setMood({
+        bloomStrength: 0.55,
+        bloomRadius: 0.42,
+        chromatic: 0.0011,
+        vignette: 0.2,
+        grain: 0.18,
+      });
+      this.renderer.toneMappingExposure = 1.15;
+      this.baseExposure = 1.15;
+    }
+
+    if (this.scrapDebris) {
+      this.scrapDebris.visible = id === 'scrap_maze' || id === 'asteroid_storm' || id === 'standard';
+      const mat = this.scrapDebris.material as THREE.PointsMaterial;
+      mat.opacity = id === 'scrap_maze' ? 0.95 : 0.55;
+      mat.size = id === 'asteroid_storm' ? 3.6 : 2.6;
+    }
+    if (this.lavaVeins) {
+      const mat = this.lavaVeins.material as THREE.MeshStandardMaterial;
+      mat.emissiveIntensity = id === 'asteroid_storm' ? 1.4 : 0.75;
+      mat.opacity = id === 'low_grav' ? 0.2 : 0.38;
     }
   }
 
@@ -923,70 +1295,93 @@ export class World3D {
 
     const danger = opts.danger ?? 0;
     const kill = opts.killCam ?? null;
-    const focusSide: 0 | 1 = opts.focusSide ?? opts.localSlot ?? 0;
+    const intro = opts.matchIntro ?? null;
+    this.killBoost = kill ? 1.9 : intro ? 1.25 + intro.pulse * 0.35 : 1;
+    const focusSide = opts.focusSide ?? opts.localSlot ?? 0;
+    const shipN = state.ships.length;
+    const planetX = getPlanetX();
+    const planetY = getPlanetY();
 
-    const shipA = state.ships[0];
-    const shipB = state.ships[1];
+    while (this.shipDraw.length < shipN) {
+      this.shipDraw.push({ x: planetX, y: planetY });
+    }
 
     // Seed sticky draws once ships exist
     if (!this.shipDrawInit) {
-      this.shipDraw[0] = nearestImage(this.camLook.x, this.camLook.y, shipA.x, shipA.y);
-      this.shipDraw[1] = nearestImage(this.camLook.x, this.camLook.y, shipB.x, shipB.y);
+      for (let i = 0; i < shipN; i++) {
+        const s = state.ships[i];
+        this.shipDraw[i] = nearestImage(this.camLook.x, this.camLook.y, s.x, s.y);
+      }
       this.shipDrawInit = true;
     }
 
     // Advance each ship along the continuous wrap path.
     // maxStickDist keeps draws from drifting onto an off-screen wrap tile.
-    this.shipDraw[0] = nearestImageSticky(
-      this.camLook.x,
-      this.camLook.y,
-      shipA.x,
-      shipA.y,
-      this.shipDraw[0].x,
-      this.shipDraw[0].y,
-      100,
-      360,
-    );
-    this.shipDraw[1] = nearestImageSticky(
-      this.camLook.x,
-      this.camLook.y,
-      shipB.x,
-      shipB.y,
-      this.shipDraw[1].x,
-      this.shipDraw[1].y,
-      100,
-      360,
-    );
+    for (let i = 0; i < shipN; i++) {
+      const ship = state.ships[i];
+      const prev = this.shipDraw[i] ?? { x: planetX, y: planetY };
+      this.shipDraw[i] = nearestImageSticky(
+        this.camLook.x,
+        this.camLook.y,
+        ship.x,
+        ship.y,
+        prev.x,
+        prev.y,
+        i === focusSide ? 100 : 90,
+        i === focusSide ? 360 : 380,
+      );
+    }
 
-    const focusShip = state.ships[focusSide];
-    const focusDraw = this.shipDraw[focusSide];
-    const otherSide: 0 | 1 = focusSide === 0 ? 1 : 0;
+    const focusShip = state.ships[focusSide] ?? state.ships[0];
+    const focusDraw = this.shipDraw[focusSide] ?? this.shipDraw[0] ?? { x: planetX, y: planetY };
+
+    const aliveIndices: number[] = [];
+    for (let i = 0; i < shipN; i++) {
+      if (state.ships[i].alive) aliveIndices.push(i);
+    }
 
     let targetX = this.camLook.x;
     let targetY = this.camLook.y;
     let pairDist = 420;
-    if (shipA.alive && shipB.alive) {
-      const midX = (this.shipDraw[0].x + this.shipDraw[1].x) * 0.5;
-      const midY = (this.shipDraw[0].y + this.shipDraw[1].y) * 0.5;
-      // Bias frame toward the human ship so it never drifts off the edge
-      const bias = focusShip.alive ? 0.38 : 0;
-      targetX = lerp(midX, focusDraw.x, bias);
-      targetY = lerp(midY, focusDraw.y, bias);
-      pairDist = Math.hypot(
-        this.shipDraw[0].x - this.shipDraw[1].x,
-        this.shipDraw[0].y - this.shipDraw[1].y,
-      );
-    } else if (focusShip.alive) {
-      targetX = focusDraw.x;
-      targetY = focusDraw.y;
+    if (aliveIndices.length > 0) {
+      const focusIdx =
+        focusShip?.alive && focusSide < shipN ? focusSide : aliveIndices[0]!;
+      const focusPt = this.shipDraw[focusIdx] ?? focusDraw;
+      const nearestOthers = aliveIndices
+        .filter((i) => i !== focusIdx)
+        .map((i) => ({
+          i,
+          d: Math.hypot(
+            (this.shipDraw[i]?.x ?? focusPt.x) - focusPt.x,
+            (this.shipDraw[i]?.y ?? focusPt.y) - focusPt.y,
+          ),
+        }))
+        .sort((a, b) => a.d - b.d)
+        .slice(0, 4);
+      const included = [focusIdx, ...nearestOthers.map((o) => o.i)];
+      let centX = 0;
+      let centY = 0;
+      for (const i of included) {
+        const pt = this.shipDraw[i] ?? focusPt;
+        centX += pt.x;
+        centY += pt.y;
+      }
+      centX /= included.length;
+      centY /= included.length;
+      const bias = focusShip?.alive ? 0.38 : 0;
+      targetX = lerp(centX, focusPt.x, bias);
+      targetY = lerp(centY, focusPt.y, bias);
       pairDist = 180;
-    } else if (shipA.alive) {
-      targetX = this.shipDraw[0].x;
-      targetY = this.shipDraw[0].y;
-      pairDist = 220;
-    } else if (shipB.alive) {
-      targetX = this.shipDraw[1].x;
-      targetY = this.shipDraw[1].y;
+      for (const i of included) {
+        const pt = this.shipDraw[i] ?? focusPt;
+        pairDist = Math.max(
+          pairDist,
+          Math.hypot(pt.x - focusPt.x, pt.y - focusPt.y),
+        );
+      }
+    } else {
+      targetX = planetX;
+      targetY = planetY;
       pairDist = 220;
     }
 
@@ -994,12 +1389,12 @@ export class World3D {
     // Catch up hard if the focus ship is leaving the frame.
     {
       const focusDist = Math.hypot(focusDraw.x - this.camLook.x, focusDraw.y - this.camLook.y);
-      const urgency = focusShip.alive ? clamp((focusDist - 160) / 280, 0, 1) : 0;
+      const urgency = focusShip?.alive ? clamp((focusDist - 160) / 280, 0, 1) : 0;
       const follow = (1 - Math.pow(0.001, dt)) * lerp(0.72, 1.35, urgency);
       this.camLook.x += (targetX - this.camLook.x) * Math.min(1, follow);
       this.camLook.y += (targetY - this.camLook.y) * Math.min(1, follow);
       // Hard snap if still way behind (warp / spawn / wrap pop)
-      if (focusShip.alive && focusDist > 520) {
+      if (focusShip?.alive && focusDist > 520) {
         this.camLook.x = lerp(this.camLook.x, focusDraw.x, 0.55);
         this.camLook.y = lerp(this.camLook.y, focusDraw.y, 0.55);
         this.shipDraw[focusSide] = nearestImage(
@@ -1012,7 +1407,7 @@ export class World3D {
     }
 
     // After cam moved, re-anchor focus ship to camera-nearest image
-    if (focusShip.alive) {
+    if (focusShip?.alive) {
       this.shipDraw[focusSide] = nearestImage(
         this.camLook.x,
         this.camLook.y,
@@ -1020,14 +1415,16 @@ export class World3D {
         focusShip.y,
       );
     }
-    if (state.ships[otherSide].alive) {
-      this.shipDraw[otherSide] = nearestImageSticky(
+    for (let i = 0; i < shipN; i++) {
+      if (i === focusSide || !state.ships[i].alive) continue;
+      const prev = this.shipDraw[i] ?? { x: planetX, y: planetY };
+      this.shipDraw[i] = nearestImageSticky(
         this.camLook.x,
         this.camLook.y,
-        state.ships[otherSide].x,
-        state.ships[otherSide].y,
-        this.shipDraw[otherSide].x,
-        this.shipDraw[otherSide].y,
+        state.ships[i].x,
+        state.ships[i].y,
+        prev.x,
+        prev.y,
         90,
         380,
       );
@@ -1037,8 +1434,8 @@ export class World3D {
     const pv = nearestImageSticky(
       this.camLook.x,
       this.camLook.y,
-      PLANET_X,
-      PLANET_Y,
+      planetX,
+      planetY,
       this.planetView.x,
       this.planetView.y,
       220,
@@ -1051,54 +1448,82 @@ export class World3D {
     this.arenaFloor.position.set(pv.x, 0, pv.y);
     this.softPad.position.set(pv.x, -2, pv.y);
 
-    // Separation -> zoom. Pull out enough that both ships fit with margin.
+    // Separation -> zoom. Pull out enough that framed ships fit with margin.
     // Also factor focus-ship distance from look target so YOU stay framed.
-    const focusNow = this.shipDraw[focusSide];
-    const otherNow = this.shipDraw[otherSide];
-    if (shipA.alive && shipB.alive) {
-      pairDist = Math.hypot(focusNow.x - otherNow.x, focusNow.y - otherNow.y);
-    }
-    const focusFromLook = focusShip.alive
+    const focusNow = this.shipDraw[focusSide] ?? focusDraw;
+    const focusFromLook = focusShip?.alive
       ? Math.hypot(focusNow.x - this.camLook.x, focusNow.y - this.camLook.y)
       : 0;
     const fitDist = Math.max(pairDist, focusFromLook * 2.1);
     const sepT = clamp((fitDist - 60) / 780, 0, 1);
     this.camSep += (sepT - this.camSep) * Math.min(1, dt * 3.4);
 
+    const arenaScale =
+      state.arenaW > ARENA_W * 1.5 ? Math.sqrt(state.arenaW / ARENA_W) : 1;
+
     let lookX = this.camLook.x;
     let lookY = 4;
     let lookZ = this.camLook.y;
     // Wider max zoom-out so far separations still keep ships on screen
-    let height = lerp(200, 1100, this.camSep);
-    let pull = lerp(170, 900, this.camSep);
+    let height = lerp(200, 1100, this.camSep) * arenaScale;
+    let pull = lerp(170, 900, this.camSep) * arenaScale;
     let fov = lerp(30, 46, this.camSep);
     height *= 1 - danger * 0.06;
     pull *= 1 - danger * 0.05;
 
+    if (intro && !kill) {
+      // Pull wide like a stadium broadcast, then punch in on FIGHT
+      const wide = intro.phase === 'drop' ? 0.35 : 1;
+      height *= 1.18 + intro.letterbox * 0.22 * wide;
+      pull *= 1.22 + intro.letterbox * 0.18 * wide;
+      fov = lerp(fov, 38 + intro.letterbox * 6, 0.65);
+      lookY += 6 + intro.pulse * 4;
+      if (intro.pulse > 0.72) {
+        this.post?.addPunch(intro.phase === 'drop' ? 0.85 : 0.28);
+      }
+      if (intro.flash > 0.4 && intro.phase === 'drop') {
+        this.post?.addPunch(1.15);
+      }
+      this.shake = Math.max(this.shake, intro.pulse * (intro.phase === 'drop' ? 10 : 3.5));
+    }
+
     if (kill) {
       const p = Math.max(0, Math.min(1, kill.progress));
-      const punch =
-        p < 0.15 ? p / 0.15 : p < 0.72 ? 1 : 1 - ((p - 0.72) / 0.28) * 0.35;
-      const ease = punch * punch * (3 - 2 * punch);
+      const phase = kill.phase ?? (p < 0.68 ? 0 : p < 0.82 ? 1 : 2);
+      const ease = phase === 0 ? 0.7 + p * 0.25 : phase === 1 ? 1 : 0.85;
       const kf = this.viewPos(kill.focusX, kill.focusY, this.planetView);
       this.killFocus.blend = ease;
       this.killFocus.x = kf.x;
       this.killFocus.y = kf.y;
       lookX = lerp(lookX, kf.x, ease);
       lookZ = lerp(lookZ, kf.y, ease);
-      lookY = 6 + ease * 14;
-      height = lerp(height, 220, ease);
-      pull = lerp(pull, 180, ease);
-      fov = lerp(fov, 28, ease);
+      lookY = 8 + ease * (phase === 1 ? 22 : 14);
+      // Directed short: slow orbit around the finish
+      this.killCamOrbit += dt * (phase === 1 ? 0.85 : 0.35);
+      const orbit = this.killCamOrbit;
+      // Tight framing so bullets and hits read clearly
+      const targetH = phase === 0 ? 155 : phase === 1 ? 118 : 200;
+      const targetPull = phase === 0 ? 140 : phase === 1 ? 105 : 175;
+      const targetFov = phase === 0 ? 27 : phase === 1 ? 20 : 29;
+      height = lerp(height, targetH, ease * 0.95);
+      pull = lerp(pull, targetPull, ease * 0.95);
+      fov = lerp(fov, targetFov, ease * 0.95);
+      // Orbit offset in XZ around focus
+      lookX += Math.cos(orbit) * 12 * ease;
+      lookZ += Math.sin(orbit) * 12 * ease;
+      if (phase === 1 && p > 0.7 && p < 0.74) {
+        this.post?.addPunch(0.9);
+      }
       if (this.speedLines) {
-        this.speedLines.visible = true;
+        this.speedLines.visible = phase === 1;
         this.speedLines.position.set(lookX, lookY + 4, lookZ);
-        this.speedLines.rotation.y = this.clock * 0.9;
+        this.speedLines.rotation.y = this.clock * 0.15;
         (this.speedLines.material as THREE.LineBasicMaterial).opacity =
-          0.12 + ease * 0.4 * (0.6 + 0.4 * Math.sin(this.clock * 14));
+          phase === 1 ? 0.12 : 0;
       }
     } else {
       this.killFocus.blend = 0;
+      this.killCamOrbit *= 0.9;
       if (this.speedLines) {
         this.speedLines.visible = false;
         (this.speedLines.material as THREE.LineBasicMaterial).opacity = 0;
@@ -1110,30 +1535,35 @@ export class World3D {
 
     // Tiny idle bob only - no CSS canvas scale (that ghosted against the HUD)
     const bob = 1 + Math.sin(this.clock * 0.35) * 0.006;
+    const orbitYaw = kill ? this.killCamOrbit * 0.65 : 0;
     const camX =
       lookX +
-      Math.sin(this.clock * 0.11) * 6 * (1 - this.killFocus.blend) +
+      Math.sin(this.clock * 0.11 + orbitYaw) * 6 * (1 - this.killFocus.blend) +
+      Math.sin(orbitYaw) * pull * 0.08 * this.killFocus.blend +
       this.shakeX;
     const camY = height * bob + this.shakeY;
     const camZ =
       lookZ +
-      pull * bob +
-      Math.cos(this.clock * 0.09) * 5 * (1 - this.killFocus.blend) +
+      pull * bob * (kill ? 0.92 : 1) +
+      Math.cos(this.clock * 0.09 + orbitYaw) * 5 * (1 - this.killFocus.blend) +
+      Math.cos(orbitYaw) * pull * 0.08 * this.killFocus.blend +
       this.shakeZ;
     this.camera.position.set(camX, camY, camZ);
     this.camera.lookAt(lookX, lookY, lookZ);
-    // Stable exposure - avoid flicker that reads as ghosting
+    // Soft exposure bump - base mood set by setArenaMood
     this.renderer.toneMappingExposure =
-      1.12 + danger * 0.06 + this.killFocus.blend * 0.18;
+      this.baseExposure + danger * 0.05 + this.killFocus.blend * 0.22;
 
     if (this.ships) {
-      for (let i = 0; i < 2; i++) {
+      for (let i = 0; i < state.ships.length; i++) {
         const ship = state.ships[i];
         const mesh = this.ships[i];
+        if (!mesh) continue;
         const killShow = !!opts.killCam && opts.killCam.progress > 0;
         mesh.visible = ship.alive || killShow;
         if (!ship.alive && !killShow) continue;
         const vp = this.shipDraw[i];
+        if (!vp) continue;
         mesh.position.set(vp.x, 10 + Math.sin(this.clock * 3 + i) * 1.2, vp.y);
         mesh.rotation.y = -ship.angle;
         // Bank while turning
@@ -1146,13 +1576,14 @@ export class World3D {
           mesh.position.y = 8 + Math.sin(this.clock * 5 + i) * 2;
         }
 
-        // Flash on hit
-        if (ship.flash > 0) {
+        // Flash on hit - bigger when hitRead is hot
+        const hitBoost = (ship.hitRead ?? 0) > 0 ? 1 + ship.hitRead * 2.2 : 1;
+        if (ship.flash > 0 || (ship.hitRead ?? 0) > 0) {
           mesh.traverse((o) => {
             const m = o as THREE.Mesh;
             if (!m.isMesh) return;
             const mat = m.material as THREE.MeshStandardMaterial;
-            if (mat?.emissive) mat.emissiveIntensity = 2.2;
+            if (mat?.emissive) mat.emissiveIntensity = 2.2 * hitBoost;
           });
         } else {
           mesh.traverse((o) => {
@@ -1169,13 +1600,20 @@ export class World3D {
         }
 
         const cloaked = ship.cloak > 0.05;
+        // Neon fog: dim ships that are far from camera focus
+        let fogDim = 1;
+        if (this.cloakFog && ship.alive) {
+          const distCam = Math.hypot(vp.x - this.camLook.x, vp.y - this.camLook.y);
+          fogDim = clamp(1.15 - distCam / 420, 0.18, 1);
+          if (ship.flash > 0.05 || ship.thrustTime > 0.05) fogDim = Math.max(fogDim, 0.7);
+        }
         mesh.traverse((o) => {
           const m = o as THREE.Mesh;
           if (!m.isMesh) return;
           const mat = m.material as THREE.MeshStandardMaterial;
           if (mat && 'opacity' in mat) {
-            mat.transparent = cloaked || ship.invuln > 0;
-            mat.opacity = cloaked ? 0.22 : ship.invuln > 0 ? 0.7 : 1;
+            mat.transparent = cloaked || ship.invuln > 0 || fogDim < 0.98;
+            mat.opacity = (cloaked ? 0.22 : ship.invuln > 0 ? 0.7 : 1) * fogDim;
           }
         });
 
@@ -1191,14 +1629,17 @@ export class World3D {
             : 0.01;
           ex.scale.setScalar(s);
           (ex as THREE.Mesh).visible = on;
-          if (whip) {
-            const mat = (ex as THREE.Mesh).material as THREE.MeshBasicMaterial | THREE.MeshStandardMaterial;
-            if (mat && 'color' in mat) mat.color.setHex(0x7cf5c8);
+          const mat = (ex as THREE.Mesh).material as
+            | THREE.MeshBasicMaterial
+            | THREE.MeshStandardMaterial;
+          if (mat && 'color' in mat) {
+            if (whip) mat.color.setHex(0x7cf5c8);
+            else mat.color.copy(this.trailColor);
           }
         }
 
         const shield = this.shieldMeshes[i];
-        if (ship.shield > 0 && ship.alive) {
+        if (shield && ship.shield > 0 && ship.alive) {
           shield.visible = true;
           const r = SHIPS[ship.shipId].radius + 10;
           shield.scale.setScalar(r);
@@ -1206,25 +1647,151 @@ export class World3D {
           shield.rotation.y = this.clock * 2;
           (shield.material as THREE.MeshBasicMaterial).opacity =
             0.2 + 0.15 * Math.sin(this.clock * 8);
-        } else {
+        } else if (shield) {
           shield.visible = false;
         }
+
+        const tele = this.telegraphMeshes[i];
+        if (tele && ship.telegraph > 0 && ship.alive) {
+          tele.visible = true;
+          const r = SHIPS[ship.shipId].radius + 18 + (0.42 - ship.telegraph) * 40;
+          tele.scale.setScalar(r);
+          tele.position.set(vp.x, 4, vp.y);
+          const mat = tele.material as THREE.MeshBasicMaterial;
+          mat.color.set(SHIPS[ship.shipId].accent);
+          mat.opacity = 0.35 + 0.45 * (ship.telegraph / 0.42);
+          // Anime glyph ring pulse
+          tele.rotation.z = this.clock * 2.5;
+        } else if (tele) {
+          tele.visible = false;
+        }
+
+        const ident = mesh.getObjectByName('identity');
+        if (ident) {
+          ident.rotation.z = this.clock * 1.2;
+          ident.scale.setScalar(1 + Math.sin(this.clock * 3 + i) * 0.06);
+        }
+
+        // Ribbon trails
+        const thrusting =
+          ship.alive &&
+          (ship.thrustTime > 0 || ship.afterburn > 0 || ship.panic > 0 || ship.trailHeat > 0.2);
+        const backX = vp.x - Math.cos(ship.angle) * (SHIPS[ship.shipId].radius + 6);
+        const backZ = vp.y - Math.sin(ship.angle) * (SHIPS[ship.shipId].radius + 6);
+        this.ribbons?.update(
+          i,
+          backX,
+          mesh.position.y - 2,
+          backZ,
+          this.gfx.ribbons && thrusting,
+          ship.trailHeat,
+        );
+
+        // In-world holobar HUD
+        this.worldHud?.update(
+          i,
+          ship,
+          vp.x,
+          mesh.position.y,
+          vp.y,
+          this.camera,
+          this.gfx.worldHud && ship.alive && !opts.killCam,
+        );
+
+        // Impact grammar when hitRead spikes
+        const hr = ship.hitRead ?? 0;
+        if (hr > 0.15 && this.prevHitRead[i]! < 0.12 && ship.alive) {
+          if (this.gfx.signatureFx) {
+            this.signatureFx?.impact(
+              vp.x,
+              mesh.position.y,
+              vp.y,
+              ship.lastHitAngle ?? 0,
+              12 + hr * 40,
+              hr > 0.45 ? '#ff6b4a' : '#ffb347',
+            );
+          }
+          if (this.gfx.combatLights) {
+            this.combatLights?.burst(
+              vp.x,
+              mesh.position.y + 6,
+              vp.y,
+              SHIPS[ship.shipId].accent,
+              2.8,
+              0.22,
+              140,
+            );
+          }
+          if (this.gfx.postPunch) this.post?.addPunch(0.45 + hr);
+          this.addShake(3 + hr * 8);
+        }
+        this.prevHitRead[i] = hr;
+
+        // Kill signature when a ship just died
+        if (this.prevAlive[i] && !ship.alive) {
+          let killer = ship;
+          let bestD = Infinity;
+          for (let j = 0; j < state.ships.length; j++) {
+            if (j === i) continue;
+            const other = state.ships[j];
+            if (!other.alive || !isHostile(ship, other)) continue;
+            const d = Math.hypot(other.x - ship.x, other.y - ship.y);
+            if (d < bestD) {
+              bestD = d;
+              killer = other;
+            }
+          }
+          if (this.gfx.signatureFx) {
+            this.signatureFx?.killSignature(
+              killer.alive ? killer.shipId : ship.shipId,
+              vp.x,
+              mesh.position.y,
+              vp.y,
+            );
+          }
+          if (this.gfx.combatLights) {
+            this.combatLights?.burst(
+              vp.x,
+              mesh.position.y + 10,
+              vp.y,
+              SHIPS[ship.shipId].color,
+              4.5,
+              0.55,
+              260,
+            );
+          }
+          if (this.gfx.postPunch) this.post?.addPunch(1.2);
+        }
+        this.prevAlive[i] = ship.alive;
       }
+
+      this.syncScrapZones(state);
 
       // Tractor - thicker animated beam
       const tractorShip = state.ships.find((s) => s.tractor > 0 && s.alive);
       if (tractorShip) {
-        const foe = state.ships[tractorShip.player === 0 ? 1 : 0];
-        this.tractorLine.visible = foe.alive;
-        const pos = this.tractorLine.geometry.attributes.position as THREE.BufferAttribute;
-        const wobble = Math.sin(this.clock * 14) * 4;
+        let foe: (typeof state.ships)[number] | undefined;
+        let bestD = Infinity;
+        for (const s of state.ships) {
+          if (s === tractorShip || !s.alive || !isHostile(tractorShip, s)) continue;
+          const d = Math.hypot(s.x - tractorShip.x, s.y - tractorShip.y);
+          if (d < bestD) {
+            bestD = d;
+            foe = s;
+          }
+        }
         const ta = this.shipDraw[tractorShip.player];
-        const tb = this.shipDraw[foe.player];
-        pos.setXYZ(0, ta.x, 8 + wobble * 0.2, ta.y);
-        pos.setXYZ(1, tb.x, 8 - wobble * 0.2, tb.y);
-        pos.needsUpdate = true;
-        const mat = this.tractorLine.material as THREE.LineBasicMaterial;
-        mat.opacity = 0.55 + 0.25 * Math.sin(this.clock * 10);
+        const tb = foe ? this.shipDraw[foe.player] : undefined;
+        this.tractorLine.visible = !!(foe?.alive && ta && tb);
+        if (foe?.alive && ta && tb) {
+          const pos = this.tractorLine.geometry.attributes.position as THREE.BufferAttribute;
+          const wobble = Math.sin(this.clock * 14) * 4;
+          pos.setXYZ(0, ta.x, 8 + wobble * 0.2, ta.y);
+          pos.setXYZ(1, tb.x, 8 - wobble * 0.2, tb.y);
+          pos.needsUpdate = true;
+          const mat = this.tractorLine.material as THREE.LineBasicMaterial;
+          mat.opacity = 0.55 + 0.25 * Math.sin(this.clock * 10);
+        }
       } else {
         this.tractorLine.visible = false;
       }
@@ -1234,11 +1801,13 @@ export class World3D {
       if (coneShip) {
         this.coneMesh.visible = true;
         const cv = this.shipDraw[coneShip.player];
-        this.coneMesh.position.set(cv.x, 2, cv.y);
-        this.coneMesh.rotation.y = -coneShip.angle;
-        const cm = this.coneMesh.material as THREE.MeshBasicMaterial;
-        cm.opacity = 0.22 + 0.12 * Math.sin(this.clock * 12);
-        this.coneMesh.scale.setScalar(1 + 0.06 * Math.sin(this.clock * 9));
+        if (cv) {
+          this.coneMesh.position.set(cv.x, 2, cv.y);
+          this.coneMesh.rotation.y = -coneShip.angle;
+          const cm = this.coneMesh.material as THREE.MeshBasicMaterial;
+          cm.opacity = 0.22 + 0.12 * Math.sin(this.clock * 12);
+          this.coneMesh.scale.setScalar(1 + 0.06 * Math.sin(this.clock * 9));
+        }
       } else {
         this.coneMesh.visible = false;
       }
@@ -1248,7 +1817,26 @@ export class World3D {
     this.syncDrones(state);
     this.syncAsteroids(state);
     this.syncEffects(state);
-    this.renderer.render(this.scene, this.camera);
+
+    if (this.lavaVeins) {
+      const mat = this.lavaVeins.material as THREE.MeshStandardMaterial;
+      mat.emissiveIntensity =
+        (this.mapMoodId === 'asteroid_storm' ? 1.1 : 0.65) +
+        Math.sin(this.clock * 2.2) * 0.2;
+    }
+    if (this.scrapDebris) {
+      this.scrapDebris.rotation.y += dt * 0.08;
+    }
+
+    if (this.gfx.combatLights) this.combatLights?.update(dt);
+    if (this.gfx.signatureFx) this.signatureFx?.update(dt);
+    this.post?.update(dt, {
+      killCam: !!kill,
+      danger,
+      impact: false,
+    });
+    if (this.gfx.postFx && this.post) this.post.render();
+    else this.renderer.render(this.scene, this.camera);
   }
 
   private asteroidColor(kind: string): number {
@@ -1432,15 +2020,20 @@ export class World3D {
         this.scene.add(root);
         obj = { mesh: root, id: p.id, kind: p.kind };
         this.projectiles.set(p.id, obj);
+        const spawn = this.viewPos(p.x, p.y, this.planetView);
+        this.combatLights?.burst(spawn.x, 12, spawn.y, color, 1.4, 0.12, 90);
       }
       const pv = this.cachedViewPos(p.id + 200000, p.x, p.y);
-      obj.mesh.position.set(pv.x, 8, pv.y);
+      obj.mesh.position.set(pv.x, 8 + (this.killBoost > 1 ? 4 : 0), pv.y);
       const ang = Math.atan2(p.vy, p.vx);
       obj.mesh.rotation.y = -ang;
+      let scale = this.killBoost;
       if (p.kind === 'nuke' || p.kind === 'flame') {
-        const pulse = 1 + Math.sin(this.clock * 18 + p.id) * 0.08;
-        obj.mesh.scale.setScalar(pulse);
+        scale *= 1 + Math.sin(this.clock * 18 + p.id) * 0.08;
+      } else if (p.kind === 'heavy') {
+        scale *= 1.35;
       }
+      obj.mesh.scale.setScalar(scale);
     }
     for (const [id, obj] of this.projectiles) {
       if (!seen.has(id)) {
@@ -1620,6 +2213,25 @@ export class World3D {
         this.effects.set(e.id, obj);
         if (e.kind === 'nuke_flash' || e.kind === 'explosion' || e.kind === 'nova') {
           this.addShake(e.kind === 'nuke_flash' ? 12 : 6);
+          this.post?.addPunch(e.kind === 'nuke_flash' ? 1.2 : 0.7);
+        }
+        const ev0 = this.viewPos(e.x, e.y, this.planetView);
+        if (
+          e.kind === 'explosion' ||
+          e.kind === 'nova' ||
+          e.kind === 'nuke_flash' ||
+          e.kind === 'spark' ||
+          e.kind === 'pickup'
+        ) {
+          this.combatLights?.burst(
+            ev0.x,
+            14,
+            ev0.y,
+            e.color,
+            e.kind === 'nuke_flash' ? 5 : e.kind === 'explosion' ? 3.5 : 2.2,
+            e.kind === 'nuke_flash' ? 0.5 : 0.28,
+            e.kind === 'nuke_flash' ? 320 : 160,
+          );
         }
       }
       const t = 1 - e.life / e.maxLife;
@@ -1675,9 +2287,15 @@ export class World3D {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h, false);
+    this.post?.setSize(w, h);
   }
 
   dispose(): void {
+    this.post?.dispose();
+    this.ribbons?.dispose();
+    this.combatLights?.dispose();
+    this.signatureFx?.dispose();
+    this.worldHud?.dispose();
     this.renderer.dispose();
   }
 }

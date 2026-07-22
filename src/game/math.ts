@@ -1,4 +1,5 @@
-import { ARENA_H, ARENA_W, WRAP_MARGIN } from './types';
+import { WRAP_MARGIN } from './types';
+import { getArenaH, getArenaW } from './arena';
 
 export function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -9,6 +10,8 @@ export function lerp(a: number, b: number, t: number): number {
 }
 
 export function wrapPos(x: number, y: number): { x: number; y: number } {
+  const ARENA_W = getArenaW();
+  const ARENA_H = getArenaH();
   let nx = x;
   let ny = y;
   if (nx < -WRAP_MARGIN) nx += ARENA_W + WRAP_MARGIN * 2;
@@ -79,6 +82,8 @@ export function wrapDelta(
 ): { dx: number; dy: number; dist: number } {
   let dx = bx - ax;
   let dy = by - ay;
+  const ARENA_W = getArenaW();
+  const ARENA_H = getArenaH();
   const w = ARENA_W + WRAP_MARGIN * 2;
   const h = ARENA_H + WRAP_MARGIN * 2;
   if (dx > w / 2) dx -= w;

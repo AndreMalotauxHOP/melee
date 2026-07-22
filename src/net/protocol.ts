@@ -10,6 +10,7 @@ export type ClientMsg =
   | { type: 'ready' }
   | { type: 'input'; tick: number; bits: number }
   | { type: 'pick'; index: number }
+  | { type: 'rematch' }
   | { type: 'ping'; t: number };
 
 export type ServerMsg =
@@ -25,6 +26,7 @@ export type ServerMsg =
   | { type: 'peer_input'; tick: number; bits: number }
   | { type: 'peer_pick'; index: number }
   | { type: 'peer_left' }
+  | { type: 'rematch_start'; seed: number }
   | { type: 'pong'; t: number };
 
 export function encode(msg: ClientMsg | ServerMsg): string {

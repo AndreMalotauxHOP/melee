@@ -72,7 +72,8 @@ export type ProjectileKind =
 
 export interface Projectile {
   id: number;
-  owner: 0 | 1;
+  /** Slot index of owner */
+  owner: number;
   kind: ProjectileKind;
   x: number;
   y: number;
@@ -112,7 +113,7 @@ export interface Effect {
 
 export interface Drone {
   id: number;
-  owner: 0 | 1;
+  owner: number;
   x: number;
   y: number;
   vx: number;
@@ -124,7 +125,10 @@ export interface Drone {
 }
 
 export interface ShipRuntime {
-  player: 0 | 1;
+  /** Slot index 0..N-1 (legacy name `player`) */
+  player: number;
+  /** Team for 2v2; null for FFA */
+  team: 0 | 1 | null;
   shipId: ShipId;
   x: number;
   y: number;
@@ -162,6 +166,14 @@ export interface ShipRuntime {
   /** Temporary asteroid pickups */
   powerBoost: number;
   hasteBoost: number;
+  /** Windup before a big special fires (seconds remaining) */
+  telegraph: number;
+  /** Special already paid for - fire when telegraph hits 0 */
+  pendingSpecial: boolean;
+  /** Seconds of big hit-read flash after taking damage */
+  hitRead: number;
+  /** Direction of last hit (for trail) */
+  lastHitAngle: number;
 }
 
 export type AsteroidKind = 'rock' | 'heal' | 'energy' | 'power' | 'haste' | 'shield';
@@ -180,14 +192,52 @@ export interface Asteroid {
   life: number;
 }
 
+/** Soft arena hazard - scrap piles and drag lanes. */
+export type ScrapZoneKind = 'pile' | 'lane';
+
+export interface ScrapZone {
+  id: number;
+  kind: ScrapZoneKind;
+  x: number;
+  y: number;
+  /** For lanes: length along angle; for piles: radius */
+  radius: number;
+  angle: number;
+  /** Extra length for lane rectangles */
+  length: number;
+  /** Drag multiplier while inside (1 = none, >1 = sticky) */
+  drag: number;
+  /** Tiny chip damage per second while inside piles */
+  dps: number;
+}
+
+export type MapRuleId = 'standard' | 'asteroid_storm' | 'cloak_fog' | 'scrap_maze' | 'low_grav';
+
+export interface MapRulesState {
+  id: MapRuleId;
+  label: string;
+  asteroidMul: number;
+  cloakFog: boolean;
+  scrapHeavy: boolean;
+  forceGravity?: 0 | 1 | 2;
+  startHpFrac: number;
+}
+
 export interface SimState {
   tick: number;
-  ships: [ShipRuntime, ShipRuntime];
+  ships: ShipRuntime[];
   projectiles: Projectile[];
   drones: Drone[];
   effects: Effect[];
   asteroids: Asteroid[];
-  winner: -1 | 0 | 1 | null;
+  scrapZones: ScrapZone[];
+  /**
+   * Duel: -1 draw, 0/1 slot.
+   * Teams/FFA: winning slot index, or -1 draw.
+   */
+  winner: number | null;
+  /** Set for teams2v2 when a team wipes the other */
+  winnerTeam: 0 | 1 | null;
   nextId: number;
   seed: number;
   /** Per-match planet */
@@ -195,13 +245,34 @@ export interface SimState {
   gravity: number;
   /** 0 = whisper, 1 = normal, 2 = crushing */
   gravityTier: 0 | 1 | 2;
+  map: MapRulesState;
+  format: import('./arena').ArenaFormat;
+  arenaW: number;
+  arenaH: number;
 }
 
-export type GameMode = 'local2p' | 'vsai' | 'online';
+export type GameMode =
+  | 'local2p'
+  | 'vsai'
+  | 'online'
+  | 'aivsai'
+  | 'tutorial'
+  | 'climb'
+  | 'weekly'
+  | 'ranked'
+  | 'teams2v2'
+  | 'ffa20';
 
 export interface MatchConfig {
   mode: GameMode;
   fleet0: ShipId[];
   fleet1: ShipId[];
   roomCode?: string;
+}
+
+/** True if a and b can hurt each other. */
+export function isHostile(a: ShipRuntime, b: ShipRuntime): boolean {
+  if (!b.alive || a.player === b.player) return false;
+  if (a.team !== null && b.team !== null && a.team === b.team) return false;
+  return true;
 }

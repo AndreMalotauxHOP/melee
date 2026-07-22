@@ -13,6 +13,8 @@ export class ShipPreview {
   private clock = 0;
   private disposed = false;
   private canvas: HTMLCanvasElement;
+  private spinMul = 0.7;
+  private bobMul = 1.2;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -91,6 +93,12 @@ export class ShipPreview {
     this.scene.add(mesh);
   }
 
+  /** Amped spin for unlock reveal moments. */
+  setDrama(on: boolean): void {
+    this.spinMul = on ? 1.55 : 0.7;
+    this.bobMul = on ? 2.4 : 1.2;
+  }
+
   resize(): void {
     const w = this.canvas.clientWidth || 280;
     const h = this.canvas.clientHeight || 200;
@@ -106,9 +114,9 @@ export class ShipPreview {
     this.raf = requestAnimationFrame(this.tick);
     this.clock += 0.016;
     if (this.ship) {
-      this.ship.rotation.y = this.clock * 0.7;
+      this.ship.rotation.y = this.clock * this.spinMul;
       this.ship.rotation.x = Math.sin(this.clock * 0.5) * 0.12;
-      this.ship.position.y = Math.sin(this.clock * 1.4) * 1.2;
+      this.ship.position.y = Math.sin(this.clock * 1.4) * this.bobMul;
     }
     this.renderer.render(this.scene, this.camera);
   };

@@ -1,3 +1,4 @@
+import { shipVerb, shipMotif } from '../game/identity';
 import type { ShipId } from '../game/types';
 import { SHIPS, type ShipDef } from '../game/ships';
 
@@ -189,10 +190,11 @@ export function shipCardHtml(def: ShipDef, opts?: { ord?: number }): string {
   return `
     ${ord}
     <div class="ship-bay" style="--ship:${def.color};--accent:${def.accent}">
-      <div class="ship-silhouette" aria-hidden="true"></div>
+      <img class="ship-thumb" data-ship-thumb="${def.id}" alt="" width="160" height="120" decoding="async" />
       <div class="ship-bay-glow"></div>
     </div>
     <div class="name" style="color:${def.color}">${def.name}</div>
+    <div class="verb">${shipVerb(def.id)}</div>
     <div class="role">${lore.role}</div>
   `;
 }
@@ -202,10 +204,11 @@ export function pickCardHtml(def: ShipDef): string {
   const lore = SHIP_LORE[def.id];
   return `
     <div class="ship-bay mini" style="--ship:${def.color};--accent:${def.accent}">
-      <div class="ship-silhouette" aria-hidden="true"></div>
+      <img class="ship-thumb" data-ship-thumb="${def.id}" alt="" width="120" height="90" decoding="async" />
       <div class="ship-bay-glow"></div>
     </div>
     <span class="nm" style="color:${def.color}">${def.name}</span>
+    <span class="verb">${shipVerb(def.id)}</span>
     <span class="role">${lore.role}</span>
   `;
 }
@@ -215,6 +218,7 @@ export function shipDossierHtml(def: ShipDef): string {
   const lore = SHIP_LORE[def.id];
   return `
     <div class="dossier">
+      <div class="verb-line"><b>${shipVerb(def.id)}</b> · ${shipMotif(def.id)}</div>
       <div class="counter"><b>Bullies</b> ${lore.beats}</div>
       <div class="counter weak"><b>Cries vs</b> ${lore.weakTo}</div>
       <div class="spec-grid">
